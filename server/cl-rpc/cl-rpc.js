@@ -672,8 +672,8 @@ exports.performAction = function (POST, callback) {
 				} else {
 					callback(err);
 				}
-			} else if (stderr) {
-				callback(stderr);
+	//		} else if (stderr) {
+			   //callback(stderr);
 			} else {
 				response.status = 'OK (' + (new Date().getTime() - startTime) / 1000 + 's)';
 				if (writeJSON) {
