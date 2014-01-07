@@ -5,6 +5,7 @@ var fs          = require('fs'),
 	exec        = require('child_process').exec,
 	prettyPrint = require('pretty-data').pd,
 	winston     = require('winston'),
+	ms          = require('ms'),
 	cronJob     = require('cron').CronJob;
 
 var oldConsole = console;
@@ -34,12 +35,10 @@ var dataDirs = {};
 var actionsCounter = 0;
 
 //30 days of maximum life time for cache folders
-var millisecondsInADay = 24 * 60 * 60 * 1000;
-var maximumCacheAge = 30 * millisecondsInADay;
-
+var maximumCacheAge = ms('30d');
 function cleanCache() {
 	console.log('Starting cache cleaning (delete folders older than ' +
-		Math.floor(maximumCacheAge / millisecondsInADay) + ' days)'); 
+		ms(maximumCacheAge, { long: true }) + ')'); 
 
 	var cacheDir = filesRoot + 'cache/';
 	if (!fs.existsSync(cacheDir)) {
@@ -58,8 +57,7 @@ function cleanCache() {
 					var currentTime = new Date().getTime();
 					var age = currentTime - time;
 					if (age > maximumCacheAge) {
-						days = Math.floor(age / millisecondsInADay);
-						console.log('deleting cache ' + file + ' (' + days + ' days old)'); 
+						console.log('deleting cache ' + file + ' (' + ms(age, { long: true }) + ' old)'); 
 						exec('rm -rf ' + file, {cwd : cacheDir}, callback);
 					}
 					else {
@@ -172,9 +170,6 @@ includeActionsJSON = function (file, callback) {
 			else if ( typeof (attributes.executable) === 'string' ) {
 				attributes.executable = path + '/' + attributes.executable;
 				attributes.path = path;
-			}
-			else if ( typeof (attributes.command) === 'string' ) {
-				attributes.executable = attributes.command;
 			}
 			var existingAction = actions[actionName];
 			if (existingAction) {
@@ -363,12 +358,8 @@ exports.performAction = function (POST, callback) {
 			return;
 		}
 
-		commandLine += action.attributes.executable + ' ';
-		fs.stat(action.attributes.executable, function (err, stats) {
-			if (!err) {
-				inputMTime = Math.max(stats.mtime.getTime(), inputMTime);
-			}
-		});
+		commandLine += (action.attributes.executable || 
+			action.attributes.command) + ' ';
 
 		function parseParameter (parameter, callback) {
             function validateValue (parameterValue, parameter) {
@@ -489,7 +480,17 @@ exports.performAction = function (POST, callback) {
 
 		async.eachSeries(parameters, parseParameter, function(err){
 			response.MTime = inputMTime;
-			callback (err);
+			// take into account executable modification time
+			if (action.attributes.executable) {
+				fs.stat(action.attributes.executable, function (err, stats) {
+					if (!err) {
+						inputMTime = Math.max(stats.mtime.getTime(), inputMTime);
+					}
+					callback (err);
+				});
+			} else {
+				callback ();
+			}
 		});
 	},
 
@@ -604,20 +605,22 @@ exports.performAction = function (POST, callback) {
 		}
 
 		if (cachedAction) {
-			fs.utimes(libpath.join(filesRoot, outputDirectory, "action.json"),
-				inputMTime, inputMTime,
+			exec('touch ' + libpath.join(filesRoot, outputDirectory, "action.json"),
 				function () {
 					fs.readFile(libpath.join(filesRoot, outputDirectory, 'action.log'),
 					function (err, string) {
 						response.status = 'CACHED';
 						response.log = string;
+						// touch output Directory to avoid automatic deletion
+						exec('touch ' + libpath.join(filesRoot, outputDirectory));
+
 						callback();
 				});
 			});
 			return;
 		}
 
-		var startTime=new Date().getTime();
+		var startTime = new Date().getTime();
 
 		var writeJSON = false;
 		var commandOptions = { cwd: filesRoot , maxBuffer: 1080*1920};
@@ -677,6 +680,8 @@ exports.performAction = function (POST, callback) {
 			} else {
 				response.status = 'OK (' + (new Date().getTime() - startTime) / 1000 + 's)';
 				if (writeJSON) {
+					// touch output Directory to avoid automatic deletion
+					exec('touch ' + libpath.join(filesRoot, outputDirectory));
 					fs.writeFile(filesRoot + outputDirectory + "/action.json", JSON.stringify(actionParameters), function (err) {
 						if (err) {throw err;}
 						callback();
