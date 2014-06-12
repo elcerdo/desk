@@ -162,9 +162,7 @@ qx.Class.define("desk.Action",
 				if (!parameters) {
 					return;
 				}
-				var items = manager.getItems();
-				for (var i = 0; i != items.length; i++) {
-					var item = items[i];
+				manager.getItems().forEach(function (item) {
 					var parameterName = item.getPlaceholder();
 					var parameterValue = parameters[parameterName];
 					if (parameterValue !== undefined) {
@@ -174,8 +172,7 @@ qx.Class.define("desk.Action",
 							item.getUserData("label").setVisibility("excluded");
 						}
 					}
-
-				}
+				});
 			}
 			setUIParameters(this.__loadedParameters, false);
 			setUIParameters(this.__providedParameters, !this.__standalone);
@@ -252,7 +249,7 @@ qx.Class.define("desk.Action",
 				return this.__tabView;
 			}
 			var tabView = this.__tabView = new qx.ui.tabview.TabView ();
-			var page = new qx.ui.tabview.Page("Input");
+			var page = new qx.ui.tabview.Page("Parameters");
 			page.setLayout(new qx.ui.layout.HBox());
 			page.add(this, {flex : 1});
 			tabView.add(page);
@@ -275,15 +272,16 @@ qx.Class.define("desk.Action",
 				var outputDirectory = this.getOutputDirectory();
 				this.__embededFileBrowser = new desk.FileBrowser( outputDirectory , false );
 				this.__embededFileBrowser.setUserData( "action" , this );
+				this.__embededFileBrowser.setHeight(200);
 				page.add( this.__embededFileBrowser , { flex : 1 } );
 
-				this.addListener( "actionUpdated" , function () {
-					this.__embededFileBrowser.updateRoot(this.getOutputDirectory());
-				} , this );
-				this.addListener("changeOutputDirectory", function () {
-					this.__embededFileBrowser.updateRoot(this.getOutputDirectory());
-				} , this );
+				this.addListener( "actionUpdated" , this.__updateFileBrowser, this );
+				this.addListener("changeOutputDirectory", this.__updateFileBrowser , this );
 			}, this);
+		},
+
+		__updateFileBrowser : function () {
+			this.__embededFileBrowser.updateRoot(this.getOutputDirectory());
 		},
 
 		__updateButton : null,
@@ -337,7 +335,6 @@ qx.Class.define("desk.Action",
 			}
 			parentActions = _.uniq(parentActions);
 
-			var self = this;
 			async.each(parentActions, 
 				function (action, callback) {
 					action.addListenerOnce("actionUpdated", function (event) {
@@ -356,40 +353,39 @@ qx.Class.define("desk.Action",
 				}
 
 				send.setLabel("Processing...");
-				var out = self.getOutputDirectory();
+				var out = this.getOutputDirectory();
 				if (out) {
 					parameterMap.output_directory = out;
 				}
 
-				if (self.__outputDirectory) {
-					if (self.__outputDirectory.substring(0,6) === "cache/") {
+				if (this.__outputDirectory) {
+					if (this.__outputDirectory.substring(0,6) === "cache/") {
 						parameterMap.output_directory = "cache/";
 					}
 				}
 
-				self.__createSubdirectory(function () {
-					self.__executeAction(parameterMap);
-				});
-			});
+				this.__createSubdirectory(function () {
+					this.__executeAction(parameterMap);
+				}.bind(this));
+			}.bind(this));
 		},
 
 		__createSubdirectory : function (callback) {
-			var that = this;
 			if (!this.getOutputSubdirectory()) {
 				callback();
 			} else {
-				desk.FileSystem.exists(that.__outputDirectory + '/' +
-					that.getOutputSubdirectory(), function (exists) {
+				desk.FileSystem.exists(this.__outputDirectory + '/' +
+					this.getOutputSubdirectory(), function (exists) {
 						if (!exists) {
 							desk.Actions.getInstance().launchAction({
 									"action" : "add_subdirectory",
-									"subdirectory_name" : that.getOutputSubdirectory(),
-									"output_directory" : that.__outputDirectory},
+									"subdirectory_name" : this.getOutputSubdirectory(),
+									"output_directory" : this.__outputDirectory},
 							callback);
 						} else {
 							callback();
 						}
-				});
+				}.bind(this));
 			}
 		},
 

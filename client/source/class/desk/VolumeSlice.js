@@ -290,12 +290,10 @@ qx.Class.define("desk.VolumeSlice",
 		setBrightnessAndContrast : function (brightness, contrast) {
 			this.__brightness = brightness;
 			this.__contrast = contrast;
-			var materials = this.__materials;
-			for (var i = 0; i < materials.length; i++) {
-				var material = materials[i];
+			this.__materials.forEach(function (material) {
 				material.uniforms.brightness.value = brightness;
 				material.uniforms.contrast.value = contrast;
-			}
+			});
 			this.fireEvent("changeImage");
 		},
 
@@ -304,10 +302,9 @@ qx.Class.define("desk.VolumeSlice",
 		 * @param opacity {Number} opacity in the [0, 1] range
 		 */
 		 setOpacity : function (opacity) {
-			var materials = this.__materials;
-			for (var i = 0; i < materials.length; i++) {
-				materials[i].uniforms.opacity.value = opacity;
-			}
+			this.__materials.forEach(function (material) {
+				material.uniforms.opacity.value = opacity;
+			});
 			this.fireEvent("changeImage");
 		},
 
@@ -356,10 +353,9 @@ qx.Class.define("desk.VolumeSlice",
 			}
 			this.__lookupTables = luts;
 
-			var materials = this.__materials;
-			for (var i = 0; i < materials.length; i++) {
-				this.__setLookupTablesToMaterial ( luts , materials[i] );
-			}
+			this.__materials.forEach(function (material) {
+				this.__setLookupTablesToMaterial ( luts , material );
+			}, this);
 			this.fireEvent("changeImage");
 		},
 
@@ -370,10 +366,9 @@ qx.Class.define("desk.VolumeSlice",
 		removeLookupTables : function () {
 			this.__lookupTables = null;
 
-			var materials = this.__materials;
-			for (var i = 0; i < materials.length; i++) {
-				materials[i].uniforms.useLookupTable.value = 0;
-			}
+			this.__materials.forEach(function (material) {
+				material.uniforms.useLookupTable.value = 0;
+			});
 			this.fireEvent("changeImage");
 		},
 
@@ -387,15 +382,15 @@ qx.Class.define("desk.VolumeSlice",
 			addMembers(material.baseShader.baseUniforms, material.uniforms);
 			var extraUniforms = material.baseShader.extraUniforms;
 			material.fragmentShader = "";
-			for (var i = 0; i!= extraUniforms.length; i++) {
-				var name = extraUniforms[i].name;
+			extraUniforms.forEach(function (uniform) {
+				var name = uniform.name;
 				material.fragmentShader += "\n uniform float " + name + ";";
-				material.uniforms[name] = extraUniforms[i];
-			}
+				material.uniforms[name] = uniform;
+			});
 
 			material.fragmentShader += "\n" + material.baseShader.baseShaderBegin;
 			var extraShaders = material.baseShader.extraShaders;
-			for (i = 0; i != extraShaders.length; i++) {
+			for (var i = 0; i != extraShaders.length; i++) {
 				material.fragmentShader += "\n" + extraShaders[i];
 			}
 			material.fragmentShader += "\n" + material.baseShader.baseShaderEnd;
@@ -423,8 +418,7 @@ qx.Class.define("desk.VolumeSlice",
 			lookupTable.needsUpdate = true;
 
 			var middleShader;
-			switch (this.__scalarType)
-			{
+			switch (this.__scalarType) {
 			case 2 :
 			case 15:
 				//char / signed char
@@ -499,10 +493,9 @@ qx.Class.define("desk.VolumeSlice",
 //			var thresholdValue=200.0;
 //			material.baseShader.extraUniforms.push({name : "thresholdlow", type: "f", value: thresholdValue });
 //			this.updateMaterial(material);
-			var self = this;
 			material.addEventListener('dispose', function () {
-				self.__materials = _.without(self.__materials, material);
-			});
+				this.__materials = _.without(this.__materials, material);
+			}, this);
 			return material;
 		},
 
@@ -528,30 +521,29 @@ qx.Class.define("desk.VolumeSlice",
                 slice = this.getSlice();
             }
 			var bounds = this.getBounds();
-			switch (this.getOrientation())
-			{
+			switch (this.getOrientation()) {
 			// XY Z
 			case 0 :
 			default:
 				var z = this.__origin[2] + (slice + this.__extent[4]) * this.__spacing[2];
-				return [bounds[0], bounds[3], z,
-					bounds[1], bounds[3], z,
+				return [bounds[0], bounds[2], z,
 					bounds[1], bounds[2], z,
-					bounds[0], bounds[2], z];
+					bounds[0], bounds[3], z,
+					bounds[1], bounds[3], z];
 			// ZY X
 			case 1 :
 				var x = this.__origin[0] + (slice + this.__extent[0]) * this.__spacing[0];
-				return [x, bounds[3], bounds[4],
-					x, bounds[3], bounds[5],
+				return [x, bounds[2], bounds[4],
 					x, bounds[2], bounds[5],
-					x, bounds[2], bounds[4]];
+					x, bounds[3], bounds[4],
+					x, bounds[3], bounds[5]];
 			// XZ Y
 			case 2 :
 				var y = this.__origin[1] + (slice + this.__extent[2]) * this.__spacing[1];
-				return [bounds[0], y, bounds[5],
-					bounds[1], y, bounds[5],
+				return [bounds[0], y, bounds[4],
 					bounds[1], y, bounds[4],
-					bounds[0], y, bounds[4]];
+					bounds[0], y, bounds[5],
+					bounds[1], y, bounds[5]];
 			}
 		},
 
@@ -564,6 +556,20 @@ qx.Class.define("desk.VolumeSlice",
 			return Math.sqrt(Math.pow(bounds[1] - bounds[0], 2) +
 							Math.pow(bounds[3] - bounds[2], 2) +
 							Math.pow(bounds[5] - bounds[4], 2));
+		},
+
+		getZIndex : function () {
+			switch(this.getOrientation()) {
+				// ZY X
+				case 1 :
+					return 0;
+				// XZ Y
+				case 2 :
+					return 1;
+				// XY Z
+				default :
+					return 2;
+			}
 		},
 
 		/**
@@ -592,26 +598,25 @@ qx.Class.define("desk.VolumeSlice",
 		 get2DCornersCoordinates : function () {
 			var bounds = this.getBounds();
 
-			switch(this.getOrientation())
-			{
+			switch(this.getOrientation()) {
 				// ZY X
 				case 1 :
-					return [bounds[4], bounds[3],
-							bounds[5], bounds[3],
+					return [bounds[4], bounds[2],
 							bounds[5], bounds[2],
-							bounds[4], bounds[2]];
+							bounds[4], bounds[3],
+							bounds[5], bounds[3]];
 				// XZ Y
 				case 2 :
-					return [bounds[0], bounds[5],
-							bounds[1], bounds[5],
+					return [bounds[0], bounds[4],
 							bounds[1], bounds[4],
-							bounds[0], bounds[4]];
+							bounds[0], bounds[5],
+							bounds[1], bounds[5]];
 				// XY Z
 				default :
-					return [bounds[0], bounds[3],
-							bounds[1], bounds[3],
+					return [bounds[0], bounds[2],
 							bounds[1], bounds[2],
-							bounds[0], bounds[2]];
+							bounds[0], bounds[3],
+							bounds[1], bounds[3]];
 			}
 		},
 
@@ -620,8 +625,7 @@ qx.Class.define("desk.VolumeSlice",
 		 * @return {Number} number of slices
 		 */
 		 getNumberOfSlices : function () {
-			switch(this.getOrientation())
-			{
+			switch(this.getOrientation()) {
 				// ZY X
 				case 1 :
 					return this.__dimensions[0];
@@ -698,10 +702,9 @@ qx.Class.define("desk.VolumeSlice",
 			this.__path = desk.FileSystem.getFileDirectory(xmlURL);
 
 			// feed shader with constants
-			var materials = this.__materials;
-			for (var i = 0; i < materials.length; i++){
-				materials[i].uniforms.imageType.value = this.__availableImageFormat;
-			}
+			this.__materials.forEach(function (material) {
+				material.uniforms.imageType.value = this.__availableImageFormat;
+			}, this);
 
 			if (this.__ready) {
 				this.__updateTriggered = true;
@@ -720,29 +723,26 @@ qx.Class.define("desk.VolumeSlice",
 				this.__updateImage();
 			}, this);
 
-			var _this = this;
-
 			this.__image.onload = function() {
 				clearTimeout(this.__timeOut);
-				_this.__updateInProgress = false;
-				var materials = _this.__materials;
-				for (var i = 0; i < materials.length; i++){
-					materials[i].uniforms.texture.value.needsUpdate = true;
-				}
-				_this.fireEvent("changeImage");
-			};
+				this.__updateInProgress = false;
+				this.__materials.forEach(function (material) {
+					material.uniforms.texture.value.needsUpdate = true;
+				});
+				this.fireEvent("changeImage");
+			}.bind(this);
 
 			this.__image.onerror = function() {
-				_this.__updateTriggered = true;
-				_this.__updateInProgress = false;
-				_this.__updateImage();
-			};
+				this.__updateTriggered = true;
+				this.__updateInProgress = false;
+				this.__updateImage();
+			}.bind(this);
 
 			this.__image.onabort = function() {
-				_this.__updateTriggered = true;
-				_this.__updateInProgress = false;
-				_this.__updateImage();
-			};
+				this.__updateTriggered = true;
+				this.__updateInProgress = false;
+				this.__updateImage();
+			}.bind(this);
 		},
 
 		__timeOut : null,
@@ -753,15 +753,11 @@ qx.Class.define("desk.VolumeSlice",
 				return;
 			}
 			if (this.__updateTriggered) {
-				this.__timeOut = setTimeout(timeOut, 5000);
+				this.__timeOut = setTimeout(function () {
+					this.__updateInProgress = false;
+					this.__updateImage();
+				}.bind(this), 5000);
 				this.__reallyUpdateImage();
-			}
-
-			var _this = this;
-			function timeOut () {
-				_this.__updateInProgress = false;
-				_this.__updateImage();
-				
 			}
 		},
 
