@@ -313,6 +313,7 @@ qx.Class.define("desk.Actions",
 		},
 
 		__onActionSuccess : function (e) {
+      console.log("action success");
 			var req = e.getTarget();
 			var parameters = req.getUserData('actionDetails');
 
