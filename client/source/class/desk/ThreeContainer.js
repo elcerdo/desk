@@ -12,6 +12,8 @@
  * @ignore(THREE.Mesh)
  * @ignore(THREE.Box3)
  * @ignore(requestAnimationFrame)
+ * @ignore(Blob)
+ * @ignore(Uint8Array)
 */
 qx.Class.define("desk.ThreeContainer", 
 {
@@ -26,7 +28,6 @@ qx.Class.define("desk.ThreeContainer",
 
 		var threeCanvas = this.__threeCanvas = this.__garbageContainer.getChildren()[0] || new qx.ui.embed.Canvas();
 		threeCanvas.set({syncDimension : true, zIndex : 0});
-		this.add(threeCanvas, {width : "100%", height : "100%"});
 		var canvas = threeCanvas.getContentElement().getCanvas();
 
 		if (!Detector.webgl) Detector.addGetWebGLMessage();
@@ -46,13 +47,14 @@ qx.Class.define("desk.ThreeContainer",
 
 		// renderer
 		var renderer = this.__renderer = new THREE.WebGLRenderer({
-			canvas : canvas, antialias: true, alpha : true, premultipliedAlpha : false});
+			canvas : canvas, antialias: true, alpha : true,
+			premultipliedAlpha : false, devicePixelRatio: 1});
 		renderer.setClearColor( 0xffffff, 1 );
-		this.__initRenderFunction();
 
 		this.__listenerId = threeCanvas.addListener("resize", this.__resizeThreeCanvas, this);
-		this.__setupFullscreen();
+		this.add(threeCanvas, {width : "100%", height : "100%"});
 		this.__resizeThreeCanvas();
+		this.__setupFullscreen();
 	},
 
 	destruct : function(){
@@ -167,14 +169,12 @@ qx.Class.define("desk.ThreeContainer",
 		__garbageContainer : new qx.ui.container.Composite(new qx.ui.layout.HBox()),
 		__listenerId : null,
 
-		__renderFunction : null,
-		__renderingTriggered : false,
-
 		__setupFullscreen : function () {
-			var parent, width, height;
+			var parent, width, height, color, alpha;
 			this.addListener('changeFullscreen', function (e) {
 				if (!e.getData()) {
 					this.set({height : height, width : width});
+					this.__renderer.setClearColor(color, alpha);
 					parent.add(this);
 				} else {
 					height = this.getHeight();
@@ -184,6 +184,9 @@ qx.Class.define("desk.ThreeContainer",
 							height : window.innerHeight,
 							zIndex : 500000});
 					qx.core.Init.getApplication().getRoot().add(this);
+					alpha = this.__renderer.getClearAlpha();
+					color = this.__renderer.getClearColor();
+					this.__renderer.setClearColor(color, 1);
 				}
 			}, this);
 			this.addListener('keydown', function (event) {
@@ -194,33 +197,37 @@ qx.Class.define("desk.ThreeContainer",
 			}, this);
 		},
 
-		__initRenderFunction : function () {
-			var _this = this;
-			this.__renderFunction =	function () {
-				if (!_this.__renderer) {
-					// there is a race condition :
-					// rendering can be triggered after widget deletion
-					return;
-				}
-				_this.fireEvent("beforeRender");
-				_this.__renderer.render(_this.__scene, _this.__camera);
-				_this.__renderingTriggered = false;
-				_this.fireEvent('render');
-			};
-		},
-
 		/**
 		* Renders the scene
-		* @param force {Boolean} forces display (i.e. does not use
-		* requestAnimationFrame())
+		* @param immediate {Boolean} triggers immediate rendering (without requestAnimationFrame)
+		* @param callback {Function} optional callback when rendering is done
 		*/
-		render : function (force) {
-			if (force) {
-				this.__renderFunction();
-			} else if (!this.__renderingTriggered) {
-				this.__renderingTriggered = true;
-				requestAnimationFrame(this.__renderFunction);
+		render : function (immediate, callback) {
+			var doRender = function () {
+				this.__render();
+				if (typeof callback === "function") {
+					callback();
+				}
+			}.bind(this);
+
+			if (immediate) {
+				doRender();
+				return;
 			}
+
+			if (this.__renderingTriggered) return;
+			this.__renderingTriggered = true;
+			requestAnimationFrame(doRender);
+		},
+
+		__renderingTriggered : null,
+
+		__render : function () {
+			this.__renderingTriggered = false;
+			this.fireEvent("beforeRender");
+			if (!this.__renderer) return;
+			this.__renderer.render(this.__scene, this.__camera);
+			this.fireEvent('render');
 		},
 
 		__resizeThreeCanvas : function () {
@@ -329,15 +336,8 @@ qx.Class.define("desk.ThreeContainer",
 			}
 			camera.near = bbdiaglength /10000;
 			camera.far = bbdiaglength * 1000000;
-			this.__resizeThreeCanvas();
+			this.__controls.update();
 			this.render();
-		},
-
-		__capture : function () {
-			this.render(true);
-			var strData = this.__renderer.domElement.toDataURL("image/png");
-			var saveData = strData.replace("image/png", "image/octet-stream");
-			document.location.href = saveData;
 		},
 
 		/**
@@ -348,28 +348,42 @@ qx.Class.define("desk.ThreeContainer",
 		snapshot : function (factor) {
 			factor = factor || 1;
 
-			if (factor === 1) {
-				this.__capture();
-			} else {
-				var canvas = this.__threeCanvas; 
-				var width = canvas.getInnerSize().width;
-				var height = canvas.getInnerSize().height;
+			if (factor !== 1) {
+				var width = this.__threeCanvas.getCanvasWidth();
+				var height = this.__threeCanvas.getCanvasHeight();
+				this.__threeCanvas.setSyncDimension(false);
 				var newHeight = Math.round(height * factor);
 				var newWidth = Math.round(width * factor);
-				this.remove(canvas);
-
-				canvas.setCanvasWidth(newWidth);
-				canvas.setCanvasHeight(newHeight);
-
 				this.__renderer.setSize(newWidth, newHeight);
 				this.__camera.aspect = newWidth / newHeight;
 				this.__camera.updateProjectionMatrix();
-				this.__capture();
+			}
 
-				canvas.setCanvasWidth(width);
-				canvas.setCanvasHeight(height);
-				this.add(canvas, {width : "100%", height : "100%"});
-				this.__resizeThreeCanvas();
+			this.render(true);
+			var strData = this.__renderer.domElement.toDataURL("image/png");
+			var binary = atob(strData.split(',')[1]);
+			var array = [];
+			for(var i = 0; i < binary.length; i++) {
+				array.push(binary.charCodeAt(i));
+			}
+			var blob =  new Blob([new Uint8Array(array)], {type: 'image/png'});
+			var a = document.createElement('a');
+			a.href = window.URL.createObjectURL(blob);
+			var date = new Date();
+			a.download = "snapshot-"+ date.getFullYear() + "-" +
+				(date.getMonth() + 1) + "-"+ date.getDate() + "_" +
+				date.getHours() + "h" + date.getMinutes() + "mn" +
+				date.getSeconds() + "s" +  ".png";
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+
+			if (factor !== 1) {
+				this.__renderer.setSize(width, height);
+				this.__camera.aspect = width / height;
+				this.__camera.updateProjectionMatrix();
+				this.__threeCanvas.setSyncDimension(true);
+				this.render();
 			}
 		},
 

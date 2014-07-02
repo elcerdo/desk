@@ -14,6 +14,7 @@
 * @ignore(THREE.DoubleSide)
 * @ignore(THREE.Projector)
 * @ignore(THREE.Geometry)
+* @ignore(THREE.PlaneGeometry)
 * @ignore(Uint8Array)
 * @lint ignoreDeprecated(alert)
 */
@@ -194,26 +195,24 @@ qx.Class.define("desk.SliceView",
 		 * Returns 'null' if no slice is present
 		*/
 		getFirstSlice : function () {
-			var slices = this.__slices;
-			for (var i = 0; i != slices.length; i++) {
-				var slice = slices[i];
-				if (!slice.getUserData('toDelete') &&
-					(slice.isReady())) {
-					return slice;
+			var res = null;
+			this.__slices.forEach(function (slice) {
+				if (!slice.getUserData('toDelete') && (slice.isReady())) {
+					res = slice;
 				}
-			}
-			return null;
+			});
+			return res;
 		},
 
 		setPaintColor : function (color) {
 			this.__initDrawing();
-			this.__paintColor=color;
+			this.__paintColor = color;
 			this.__updateBrush();
 		},
 
 		setPaintWidth : function (width) {
 			this.__initDrawing();
-			this.__paintWidth=width;
+			this.__paintWidth = width;
 			this.__updateBrush();
 		},
 
@@ -251,9 +250,7 @@ qx.Class.define("desk.SliceView",
 		 * @param slices {Array} array of slices to remove
 		*/
 		removeVolumes : function (slices) {
-			for (var i = 0; i != slices.length; i++) {
-				this.removeVolume(slices[i]);
-			}
+			slices.forEach(this.removeVolume, this);
 		},
 
 		__reorientationContainer : null,
@@ -422,29 +419,13 @@ qx.Class.define("desk.SliceView",
 		__brushCanvas : null,
 
 		__createBrushMesh : function (volumeSlice) {
-			var geometry = new THREE.Geometry();
-			geometry.dynamic = true;
+			var geometry = new THREE.PlaneGeometry( 1, 1);
 			var coordinates = volumeSlice.get2DCornersCoordinates();
 			var dimensions = volumeSlice.get2DDimensions();
 
 			this.__coordinatesRatio = 
 				[(coordinates[2] - coordinates[0]) / dimensions[0],
 				(coordinates[5] - coordinates[3]) / dimensions[1]];
-
-			for (var i = 0; i < 4; i++) {
-				geometry.vertices.push(
-					new THREE.Vector3(coordinates[2 * i],
-						coordinates[2 * i + 1], 0));
-			}
-
-			geometry.faces.push(new THREE.Face3(0, 1, 2));
-			geometry.faces.push(new THREE.Face3(0, 2, 3));
-			var uv0 = 	new THREE.Vector2(0, 0),
-				uv1 = new THREE.Vector2(1, 0),
-				uv2 = new THREE.Vector2(1, 1),
-				uv3 = new THREE.Vector2(0, 1);
-			geometry.faceVertexUvs[0].push([uv0, uv1, uv2]);
-			geometry.faceVertexUvs[0].push([uv0, uv2, uv3]);
 
 			var width = 100;
 			var height = 100;
@@ -517,29 +498,19 @@ qx.Class.define("desk.SliceView",
 			var r0 = radius * ratio[0];
 			var r1 = radius * ratio[1];
 			var geometry = this.__brushMesh.geometry;
-			geometry.vertices[0].set(-r0, -r1, 0);
-			geometry.vertices[1].set(r0, -r1, 0);
+			geometry.vertices[0].set(r0, -r1, 0);
+			geometry.vertices[1].set(-r0, -r1, 0);
 			geometry.vertices[2].set(r0, r1, 0);
 			geometry.vertices[3].set(-r0, r1, 0);
 			geometry.verticesNeedUpdate = true;
 		},
 
 		__setDrawingMesh : function (volumeSlice) {
-			var geometry = new THREE.Geometry();
+			var geometry = new THREE.PlaneGeometry(1, 1);
 			var coordinates = volumeSlice.get2DCornersCoordinates();
 			for (var i = 0; i < 4; i++) {
-				geometry.vertices.push(
-					new THREE.Vector3(coordinates[2 * i],coordinates[2*i + 1], 0));
+				geometry.vertices[i].set(coordinates[2 * i], coordinates[2*i + 1], 0);
 			}
-
-			geometry.faces.push(new THREE.Face3(0, 1, 2));
-			geometry.faces.push(new THREE.Face3(0, 2, 3));
-			var uv0 = 	new THREE.Vector2(0, 0),
-				uv1 = new THREE.Vector2(1, 0),
-				uv2 = new THREE.Vector2(1, 1),
-				uv3 = new THREE.Vector2(0, 1);
-			geometry.faceVertexUvs[0].push([uv0, uv1, uv2]);
-			geometry.faceVertexUvs[0].push([uv0, uv2, uv3]);
 
 			var width = this.__volume2DDimensions[0];
 			var height = this.__volume2DDimensions[1];
@@ -578,7 +549,6 @@ qx.Class.define("desk.SliceView",
 			}
 			this.__drawingMesh = mesh;
 
-			geometry.computeCentroids();
 			geometry.computeFaceNormals();
 			geometry.computeVertexNormals();
 			geometry.computeBoundingSphere();
@@ -612,21 +582,12 @@ qx.Class.define("desk.SliceView",
 		__drawingListeners : null,
 
 		__addSlice : function (volumeSlice, parameters, callback) {
-			var geometry = new THREE.Geometry();
+			var geometry = new THREE.PlaneGeometry(1, 1);
 			var coordinates = volumeSlice.get2DCornersCoordinates();
 			for (var i = 0; i < 4; i++) {
-				geometry.vertices.push(new THREE.Vector3(coordinates[2 * i],
-					coordinates[2 * i + 1], 0));
+				geometry.vertices[i].set(coordinates[2 * i],
+					coordinates[2 * i + 1], 0);
 			}
-
-			geometry.faces.push(new THREE.Face3(0, 1, 2));
-			geometry.faces.push(new THREE.Face3(0, 2, 3));
-			var uv0 = 	new THREE.Vector2(0, 0),
-				uv1 = new THREE.Vector2(1, 0),
-				uv2 = new THREE.Vector2(1, 1),
-				uv3 = new THREE.Vector2(0, 1);
-			geometry.faceVertexUvs[0].push([uv0, uv1, uv2]);
-			geometry.faceVertexUvs[0].push([uv0, uv2, uv3]);
 
 			var listener = this.addListener("changeSlice", function (e) {
 				volumeSlice.setSlice(e.getData());
@@ -639,7 +600,6 @@ qx.Class.define("desk.SliceView",
 			var mesh = new THREE.Mesh(geometry, material);
 			mesh.renderDepth = - this.__slices.length;
 			volumeSlice.setUserData("mesh", mesh);
-			geometry.computeCentroids();
 			geometry.computeFaceNormals();
 			geometry.computeVertexNormals();
 			geometry.computeBoundingSphere();
@@ -674,11 +634,7 @@ qx.Class.define("desk.SliceView",
 		__initFromVolume : function (volumeSlice) {
 			this.__initDrawingDone = false;
 			this.__slider.setMaximum(volumeSlice.getNumberOfSlices() - 1);
-			if (volumeSlice.getNumberOfSlices() === 1) {
-				this.__slider.setVisibility("hidden");
-			} else {
-				this.__slider.setVisibility("visible");
-			}
+			this.__slider.setVisibility(volumeSlice.getNumberOfSlices() === 1 ? "hidden" : "visible");
 
 			var camera = this.getCamera();
 			var position = camera.position;
@@ -745,7 +701,7 @@ qx.Class.define("desk.SliceView",
 				this.__orientation, parameters, function () {
 					if (volumeSlice.getUserData('toDelete')) {
 						// deletion was triggered before slice was completely loaded
-						for (var i = 0; i != slices.length; i++) {
+						for (var i = 0; i < slices.length; i++) {
 							if (slices[i] === volumeSlice) {
 								slices.splice(i, 1);
 							}
@@ -770,9 +726,7 @@ qx.Class.define("desk.SliceView",
 		 * @param rank {Int} : rank to apply
 		 **/
 		setSliceRank : function (volumeSlice, rank) {
-			var slices = this.__slices;
-			for (var i = 0; i < slices.length; i++) {
-                var slice = slices[i];
+			this.__slices.forEach(function (slice) {
 				if (slice === volumeSlice) {
 					var mesh = slice.getUserData("mesh");
 					if (mesh) {
@@ -780,7 +734,7 @@ qx.Class.define("desk.SliceView",
 						mesh.renderDepth = - rank;
 					}
 				}
-			}
+			});
 		},
 
 		__setCrossPositionFromEvent : function (event) {
@@ -796,8 +750,7 @@ qx.Class.define("desk.SliceView",
 					v[i] = dimensions[i] - 1;
 				}
 			}
-			switch (this.__orientation)
-			{
+			switch (this.__orientation) {
 			case 0 :
 				i = v[0];
 				j = v[1];
@@ -862,7 +815,7 @@ qx.Class.define("desk.SliceView",
 			var spacing = this.__volume2DSpacing;
 			var coordinates = this.__2DCornersCoordinates;
 			x = coordinates[0] + (0.5 + x) * spacing[0];
-			y = coordinates[1] - (0.5 + y) * spacing[1];
+			y = coordinates[5] - (0.5 + y) * spacing[1];
 
 			this.__positionI = i;
 			this.__positionJ = j;
@@ -900,21 +853,19 @@ qx.Class.define("desk.SliceView",
 				controls.mouseDown(this.__interactionMode,
 					event.getDocumentLeft() - origin.left,
 					event.getDocumentTop() - origin.top);
-			}
-			else if ((event.isMiddlePressed())||(event.isShiftPressed())) {
+			} else if ((event.isMiddlePressed())||(event.isShiftPressed())) {
 				this.__interactionMode = 2;
 				origin = this.getContentLocation();
 				controls.mouseDown(this.__interactionMode,
 					event.getDocumentLeft()-origin.left,
 					event.getDocumentTop()-origin.top);
-			}
-			else if (this.isPaintMode()) {
+			} else if (this.isPaintMode()) {
 				this.__interactionMode = 3;
 				this.__saveDrawingToUndoStack();
-				position=this.getPositionOnSlice(event);
+				position = this.getPositionOnSlice(event);
 				var context = this.__drawingCanvas.getContext2d();
-				var i=position.i + 0.5;
-				var j=position.j + 0.5;
+				var i = position.i + 0.5;
+				var j = position.j + 0.5;
 				var paintColor = this.__paintColor;
 				width = this.__paintWidth;
 				context.lineWidth = 0;
@@ -930,6 +881,7 @@ qx.Class.define("desk.SliceView",
 				context.moveTo(i, j);
 				context.closePath();
 				context.stroke();
+				this.__drawingCanvasModified = true;
 				this.fireEvent("changeDrawing");
 			} else if (this.isEraseMode()) {
 				this.__interactionMode = 4;
@@ -964,7 +916,6 @@ qx.Class.define("desk.SliceView",
 		__onMouseMove : function (event) {
 			this.__viewOn = true;
 			var controls = this.getControls();
-			var self = this;
 			if (this.__rightContainer.getVisibility() === "hidden") {
 				this.__directionOverlays[3].setLayoutProperties({right: 32, top: "45%"});
 				this.__rightContainer.setVisibility("visible");
@@ -972,8 +923,7 @@ qx.Class.define("desk.SliceView",
 
 			var brushMesh = this.__brushMesh;
 			var position;
-			switch (this.__interactionMode)
-			{
+			switch (this.__interactionMode) {
 			case -1:
 				if (this.isPaintMode() || this.isEraseMode()) {
 					position = this.getPositionOnSlice(event);
@@ -1147,7 +1097,7 @@ qx.Class.define("desk.SliceView",
 			var yinter = intersection.y;
 
 			var intxc=Math.floor((xinter-coordinates[0])*dimensions[0]/(coordinates[2]-coordinates[0]));
-			var intyc=dimensions[1] - 1- Math.floor((yinter-coordinates[1])*dimensions[1]/(coordinates[5]-coordinates[1]));
+			var intyc=dimensions[1] - 1- Math.floor((yinter-coordinates[5])*dimensions[1]/(coordinates[1]-coordinates[5]));
 			return {i :intxc, j :intyc, x:xinter, y:yinter};
 		},
 
@@ -1218,8 +1168,9 @@ qx.Class.define("desk.SliceView",
 				this.__sliderInUse = false;
 			}, this)
 			slider.addListener("changeValue",function(e){
-				if (!this.getFirstSlice()) return;
-				this.setSlice(this.getFirstSlice().getNumberOfSlices()-1-e.getData());
+				var slice = this.getFirstSlice();
+				if (!slice) return;
+				this.setSlice(slice.getNumberOfSlices() - 1 - e.getData());
 			}, this);
 
 			var rightContainer = this.__rightContainer = new qx.ui.container.Composite(new qx.ui.layout.VBox());

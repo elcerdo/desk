@@ -11,6 +11,7 @@
 * @ignore(THREE.Raycaster)
 * @ignore(THREE.VTKLoader)
 * @ignore(THREE.Geometry)
+* @ignore(THREE.PlaneGeometry)
 * @ignore(THREE.MeshPhongMaterial)
 * @ignore(THREE.WireframeHelper)
 * @ignore(THREE.Color)
@@ -24,7 +25,9 @@
 * @ignore (THREE.Line)
 * @ignore (async.queue)
 * @ignore (async.each)
+* @ignore (async.whilst)
 * @ignore (_.throttle)
+* @ignore (_.without)
 */
 qx.Class.define("desk.SceneContainer", 
 {
@@ -36,7 +39,6 @@ qx.Class.define("desk.SceneContainer",
         this.base(arguments);
         this.__files = [];
 		qx.Class.include(qx.ui.treevirtual.TreeVirtual, qx.ui.treevirtual.MNode);
-
         parameters = parameters || {};
 
 		if (parameters.convertVTK !== undefined) {
@@ -48,14 +50,48 @@ qx.Class.define("desk.SceneContainer",
 		this.add(leftContainer, {left : 0, top : 30});
 		leftContainer.setVisibility("excluded");
 
-		this.__setupInteractions();
+		this.addListener("mousedown", this.__onMouseDown, this);
+		this.addListener("mousemove", this.__onMouseMove, this);
+		this.addListener("mouseup", this.__onMouseUp, this);
+		this.addListener("mousewheel", this.__onMouseWheel, this);
+
+		this.addListener('keydown', function (event) {
+			if ((event.getTarget() == this.getCanvas()) &&
+                (event.getKeyIdentifier() === 'G')) {
+
+				var mesh = this.__pickMeshes(this.getMeshes());
+				if (!mesh) return;
+				var controls = this.getControls();
+                var init = controls.target.clone();
+                var fin = mesh.point.clone();
+                var current = init.clone();
+                var count = 0;
+                var numberOfFrames = 30;
+                async.whilst(
+                    function () { return count < 30; },
+                    function (callback) {
+                        controls.target.addVectors(
+                            fin.clone().multiplyScalar(count / 30),
+                            init.clone().multiplyScalar(1 - (count / 30))
+                            );
+                        controls.update();
+                        this.render();
+                        setTimeout(callback, 10);
+                        count++;
+                        this.__propagateLinks();
+                    }.bind(this),
+                    function (err) {}
+                );
+			}
+		}, this);
+
+
 		var button = new qx.ui.form.Button("+").set({opacity : 0.5, width : 30});
 		this.add (button, {left : 0, top : 0});
 		button.addListener("execute", function () {
 			if (leftContainer.getVisibility() === "visible") {
 				leftContainer.setVisibility("excluded");
 				button.setLabel("+");
-				this.render();
 			} else {
 				leftContainer.setVisibility("visible");
 				button.setLabel("-");
@@ -68,13 +104,13 @@ qx.Class.define("desk.SceneContainer",
 				colors.bgcolFocused = "rgba(249, 249, 249, 0.5)";
 				colors.bgcolFocusedSelected = "rgba(60, 100, 170, 0.5)";
 				colors.bgcolSelected = "rgba(51, 94, 168, 0.5)";
-				this.render();
 			}
 		}, this);
 
 		var buttonsContainer = new qx.ui.container.Composite();
 		buttonsContainer.setLayout(new qx.ui.layout.HBox());
 		buttonsContainer.add(this.__getDragLabel(), {flex : 1});
+		buttonsContainer.add(this.__getSaveViewButton(), {flex : 1});
 		buttonsContainer.add(this.__getResetViewButton(), {flex : 1});
 		buttonsContainer.add(this.__getSnapshotButton());
 		leftContainer.add(buttonsContainer);
@@ -90,7 +126,7 @@ qx.Class.define("desk.SceneContainer",
 		});
 
         leftContainer.add(this.__meshesTree,{flex : 1});
-		leftContainer.add(this.__getFilterContainer());
+//		leftContainer.add(this.__getFilterContainer());
 
 		this.__meshesTree.setContextMenu(this.__getContextMenu());
 
@@ -99,16 +135,16 @@ qx.Class.define("desk.SceneContainer",
 
 		this.__queue= async.queue(this.__urlLoad.bind(this), 10);
 
-		var self = this;
 		this.__setData = _.throttle(function () {
-				self.__meshesTree.getDataModel().setData();
-			}, 500);
+			this.__meshesTree.getDataModel().setData();
+		}.bind(this), 500);
 
 		if (file) {
 			this.addFile(file, parameters, callback, context);
 			window.setCaption(file);
 		}
 		this.__addDropSupport();
+		this.__volumeSlices = [];
 	},
 
 	destruct : function(){
@@ -170,9 +206,7 @@ qx.Class.define("desk.SceneContainer",
 			var scene = this.getScene();
 			if (scene) {
 				scene.traverse(function(child){
-					if ((child instanceof THREE.Mesh) ||
-						(child instanceof THREE.ParticleSystem) ||
-						(child instanceof THREE.Line)) {
+					if (child.userData.__customProperties) {
 						meshes.push(child);
 					}
 				});
@@ -210,7 +244,9 @@ qx.Class.define("desk.SceneContainer",
 			parameters.mesh = mesh;
 			this.__meshesTree.nodeGet(leaf).__customProperties = parameters;
 			mesh.userData.__customProperties = parameters;
-			this.viewAll();
+			if (parameters.updateCamera !== false) {
+				this.viewAll();
+			}
 		},
 
 		__getFilterContainer : function () {
@@ -263,9 +299,7 @@ qx.Class.define("desk.SceneContainer",
             var leaf = this.__addLeaf(leafParameters);
             parameters.leaf = leaf;
 
-			var extension = desk.FileSystem.getFileExtension(file);
-			switch (extension)
-			{
+			switch (desk.FileSystem.getFileExtension(file)) {
             case "vtk":
 				if (!this.isConvertVTK()) {
 					this.__loadFile(file, parameters, callback);
@@ -320,8 +354,12 @@ qx.Class.define("desk.SceneContainer",
 			});
 		},
 
-		removeAllMeshes : function () {
-			this.removeMeshes(this.getMeshes());
+		/**
+		 * Removes all meshes in the scene
+		 * @param dispose {Boolean} dispose meshes to avoid memory leaks (default : true)
+		 */
+		removeAllMeshes : function (dispose) {
+			this.removeMeshes(this.getMeshes(), dispose);
 		},
 
 		__parseXMLData : function (file, rootDocument, parameters, callback) {
@@ -338,7 +376,6 @@ qx.Class.define("desk.SceneContainer",
 			this.__setData();
 
 			var path = desk.FileSystem.getFileDirectory(file);
-			var self = this;
 			async.each(meshes, function (mesh, callback) {
 				var meshParameters = {parent : leaf};
 				if (mesh.hasAttribute("color")) {
@@ -369,12 +406,8 @@ qx.Class.define("desk.SceneContainer",
 				} else {
 					xmlName = mesh.getAttribute("mesh");
 				}
-				self.__readFile(path + "/" + xmlName, meshParameters, callback);
-			}, function (err, result) {
-				if (typeof callback == "function") {
-					callback();
-				}
-			});
+				this.__readFile(path + "/" + xmlName, meshParameters, callback);
+			}.bind(this), callback);
 		},
 
 		/**
@@ -389,22 +422,18 @@ qx.Class.define("desk.SceneContainer",
             this.__files.push(file);
             parameters.file = file;
 
-			function afterLoading(mesh) {
-				if (typeof callback === 'function') {
-					callback.apply(context, [mesh]);
-				}
-			}
-
-            var extension = desk.FileSystem.getFileExtension(file);
-			switch (extension)
-			{
+			switch (desk.FileSystem.getFileExtension(file)) {
 				case "ply":
 				case "obj":
 				case "stl":
 				case "vtk":
 				case "ctm":
 				case "off":
-					this.__readFile (file, parameters, afterLoading);
+					this.__readFile (file, parameters, function (mesh) {
+						if (typeof callback === 'function') {
+							callback.apply(context, [mesh]);
+						}
+					});
 					break;
 				case "xml":
 					desk.FileSystem.readFile(file, function (error, result){
@@ -415,8 +444,24 @@ qx.Class.define("desk.SceneContainer",
 						this.__parseXMLData(file, result, parameters, callback);
 					}, this);
 					break;
+				case "json" : 
+					desk.FileSystem.readFile(file, function (error, result){
+						if (error) {
+							alert("Error while reading " + file + "\n" + error);
+							throw (error);
+						}
+						if (result.viewpoint) {
+							var controls = this.getControls();
+							controls.setState(result.viewpoint);
+							setTimeout(function () {
+								this.render();
+								this.__propagateLinks();
+							}.bind(this), 50);
+						};
+					}, this);
+					break;
 				default : 
-					alert ("error : meshviewer cannot read extension " + extension);
+					alert ("error : meshviewer cannot read " + file);
 					break;
 			}
 		},
@@ -434,26 +479,15 @@ qx.Class.define("desk.SceneContainer",
 			return meshes;
 		},
 
+		__volumeSlices : null,
+
 		/**
 		 * Attaches a set of desk.VolumeSlice to the scene
 		 * @param volumeSlice {desk.VolumeSlice} volume slice to attach;
 		 * @return {THREE.Mesh} the created mesh;
 		 */
 		attachVolumeSlice : function (volumeSlice) {
-			var geometry = new THREE.Geometry();
-			geometry.dynamic = true;
-			for (var i = 0; i < 4; i++) {
-				geometry.vertices.push(new THREE.Vector3(0, 0, 0));
-			}
-			geometry.faces.push(new THREE.Face3(0, 1, 2));
-			geometry.faces.push(new THREE.Face3(0, 2, 3));
-			var uv0 = 	new THREE.Vector2(0, 0),
-				uv1 = new THREE.Vector2(1, 0),
-				uv2 = new THREE.Vector2(1, 1),
-				uv3 = new THREE.Vector2(0, 1);
-			geometry.faceVertexUvs[0].push([uv0, uv1, uv2]);
-			geometry.faceVertexUvs[0].push([uv0, uv2, uv3]);
-
+			var geometry = new THREE.PlaneGeometry( 1, 1);
 			var material = volumeSlice.getMaterial();
 			material.side = THREE.DoubleSide;
 			var mesh = new THREE.Mesh(geometry,material);
@@ -472,10 +506,15 @@ qx.Class.define("desk.SceneContainer",
 
 			var listenerId = volumeSlice.addListener('changeImage', updateTexture, this);
             this.addMesh(mesh, {label : 'View ' + (volumeSlice.getOrientation()+1),
-				listenerId : listenerId,
-                volumeSlice : volumeSlice
+                volumeSlice : volumeSlice, updateCamera : false
             });
 			updateTexture.apply(this);
+
+			mesh.addEventListener("removedFromScene", function () {
+				volumeSlice.removeListenerById(listenerId);
+				this.__volumeSlices = _.without(this.__volumeSlices, mesh);
+			}.bind(this));
+			this.__volumeSlices.push(mesh);
 			return mesh;
 		},
 
@@ -501,9 +540,11 @@ qx.Class.define("desk.SceneContainer",
 			this.capture();
 			this.__draggingInProgress = true;
 			if (this.isPickMode()) {
-				var mesh = this.__pickMeshes(event, this.getMeshes());
-				if (mesh) this.fireDataEvent("pick", mesh);
-				return;
+				var mesh = this.__pickMeshes(this.getMeshes());
+				if (mesh) {
+					this.fireDataEvent("pick", mesh);
+					return;
+				}
 			}
 			var origin = this.getContentLocation();
 			var button = 0;
@@ -524,12 +565,21 @@ qx.Class.define("desk.SceneContainer",
 				event.getDocumentTop() - origin.top);
 		},
 
+        __x : null,
+
+        __y : null,
+
 		__onMouseMove : function (event) {
+			this.__x = event.getDocumentLeft();
+			this.__y = event.getDocumentTop();
+
 			if (this.__draggingInProgress) {
 				if (this.isPickMode()) {
-					var mesh = this.__pickMeshes(event, this.getMeshes());
-					if (mesh) this.fireDataEvent("pick", mesh);
-					return;
+					var mesh = this.__pickMeshes(this.getMeshes());
+					if (mesh) {
+						this.fireDataEvent("pick", mesh);
+						return;
+					}
 				}
 				var origin = this.getContentLocation();
 				this.getControls().mouseMove(event.getDocumentLeft() - origin.left,
@@ -545,10 +595,10 @@ qx.Class.define("desk.SceneContainer",
 			this.getControls().mouseUp();
 		},
 
-		__pickMeshes : function (event, meshes) {
+		__pickMeshes : function (meshes) {
 			var origin = this.getContentLocation();
-			var x = event.getDocumentLeft() - origin.left;
-			var y = event.getDocumentTop() - origin.top;
+			var x = this.__x - origin.left;
+			var y = this.__y - origin.top;
 
 			var elementSize = this.getInnerSize();
 			var x2 = ( x / elementSize.width ) * 2 - 1;
@@ -576,37 +626,15 @@ qx.Class.define("desk.SceneContainer",
 
 		__onMouseWheel : function (event) {
 			if (event.getTarget() != this.getCanvas()) return;
-			var tree = this.__meshesTree;
-			var meshes = [];
-			this.getScene().traverse(function (object){
-				var properties = object.userData.__customProperties;
-				if (properties) {
-					if ((properties.volumeSlice) && (object.visible)){
-						meshes.push(object);
-					}
-				}
-			});
-			if (meshes.length === 0) return;
-
-			var intersects = this.__pickMeshes(event, meshes);
+			var intersects = this.__pickMeshes(this.__volumeSlices);
 			if (intersects) {
 				var volumeSlice = intersects.object.userData.__customProperties.volumeSlice;
 				var maximum = volumeSlice.getNumberOfSlices() - 1;
 				var delta = 1;
 				if (event.getWheelDelta() < 0) delta = -1;
 				var newValue = volumeSlice.getSlice() + delta;
-				newValue = Math.min(newValue, maximum);
-				newValue = Math.max(newValue, 0);
-				volumeSlice.setSlice(newValue);
+				volumeSlice.setSlice(Math.max(Math.min(newValue, maximum), 0));
 			}
-		},
-
-		__setupInteractions : function() {
-			var canvas = this.getCanvas()
-			this.addListener("mousedown", this.__onMouseDown, this);
-			this.addListener("mousemove", this.__onMouseMove, this);
-			this.addListener("mouseup", this.__onMouseUp, this);
-			this.addListener("mousewheel", this.__onMouseWheel, this);
 		},
 
 		loadURL : function (parameters, callback) {
@@ -615,7 +643,6 @@ qx.Class.define("desk.SceneContainer",
 
         addGeometry : function (geometry, parameters) {
             parameters = parameters || {label : 'geometry'};
-			geometry.dynamic = true;
 			geometry.computeBoundingBox();
 
 			var color = parameters.color || [];
@@ -650,13 +677,6 @@ qx.Class.define("desk.SceneContainer",
         },
 
 		__urlLoad : function (parameters, callback) {
-			var useWorker = true;
-			var useBuffers = true;
-
-			var self = this;
-			if (parameters.useBuffers === false) {
-				useBuffers = false;
-			}
 			var loader;
 			if (desk.FileSystem.getFileExtension(parameters.url) === "vtk") {
 				loader = this.__vtkLoader;
@@ -665,11 +685,11 @@ qx.Class.define("desk.SceneContainer",
 			}
 
 			loader.load (parameters.url + "?nocache=" + parameters.mtime, function (geometry) {
-				var mesh = self.addGeometry(geometry, parameters);
+				var mesh = this.addGeometry(geometry, parameters);
 				if (typeof callback === 'function') {
 					callback(mesh);
 				}
-			}, { useWorker : useWorker, useBuffers : useBuffers});
+			}.bind(this), {useWorker : true});
 		},
 
 		__getSnapshotButton : function () {
@@ -696,6 +716,22 @@ qx.Class.define("desk.SceneContainer",
 		__getResetViewButton : function () {
 			var button = new qx.ui.form.Button("reset view");
 			button.addListener("execute", this.resetView, this);
+			return button;
+		},
+
+		__getSaveViewButton : function () {
+			var button = new qx.ui.form.Button("save view");
+			button.addListener("execute", function () {
+				var file = prompt("Enter file name to save camera view point", "data/viewpoint.json")
+				if (file != null) {
+					button.setEnabled(false);
+					desk.FileSystem.writeFile(file,
+						JSON.stringify({viewpoint : this.getControls().getState()}), 
+						function () {
+							button.setEnabled(true);
+					});
+				}
+			}, this);
 			return button;
 		},
 
@@ -783,6 +819,7 @@ qx.Class.define("desk.SceneContainer",
 				if (selectedNode.type === qx.ui.treevirtual.MTreePrimitive.Type.LEAF) {
 					var firstSelectedMesh = this.__getMeshFromNode(selectedNode);
 					var color=firstSelectedMesh.material.color;
+					if (!color) return;
 					colorSelector.setRed(Math.round(ratio*color.r));
 					colorSelector.setGreen(Math.round(ratio*color.g));
 					colorSelector.setBlue(Math.round(ratio*color.b));
@@ -829,7 +866,7 @@ qx.Class.define("desk.SceneContainer",
 			renderDepthSpinner.addListener("changeValue", function(event){
 				if (enableUpdate) {
                     this.getSelectedMeshes().forEach(function (mesh){
-                        mesh.renderDepth=renderDepthSpinner.getValue();
+                        mesh.renderDepth = renderDepthSpinner.getValue();
                     });
 					this.render();
 				}
@@ -839,42 +876,49 @@ qx.Class.define("desk.SceneContainer",
 
         getSelectedMeshes : function () {
             var meshes = [];
-            var self = this;
             this.__meshesTree.getSelectedNodes().forEach(function (node) {
-                var mesh = self.__getMeshFromNode(node);
+                var mesh = this.__getMeshFromNode(node);
                 if (mesh) {
-                    meshes.push(mesh);
+					meshes.push(mesh);
                 }
-			});
+			}, this);
             return meshes;
         },
 
-		removeMeshes : function (meshes) {
+		/**
+		 * Removes all meshes in the scene
+		 * @param meshes {Array} Array of meshes to remove
+		 * @param dispose {Boolean} dispose mesh to avoid memory leaks (default : true)
+		 */
+		removeMeshes : function (meshes, dispose) {
 			for (var i = 0; i < meshes.length; i++) {
-				this.__removeMesh(meshes[i], true);
+				this.__removeMesh(meshes[i], true, dispose);
 			}
 			this.__setData();
 		},
 
-		removeMesh : function (mesh) {
-			this.__removeMesh(mesh);
+		/**
+		 * Removes all meshes in the scene
+		 * @param mesh {THREE.Mesh} mesh to remove
+		 * @param dispose {Boolean} dispose mesh to avoid memory leaks (default : true)
+		 */
+		removeMesh : function (mesh, dispose) {
+			this.__removeMesh(mesh, false, dispose);
 		},
 
-		__removeMesh : function (mesh, doNotSetData) {
+		__removeMesh : function (mesh, doNotSetData, dispose) {
 			var parameters = mesh.userData.__customProperties;
 			var keepGeometry = false;
 			var keepMaterial = false;
+
+			this.getScene().remove(mesh);
 
 			if (parameters) {
 				var leaf = parameters.leaf;
 				delete leaf.__customProperties;
 				this.__meshesTree.getDataModel().prune(leaf, true);
 				parameters.mesh = 0;
-				// test if mesh is actually a volume slice
-				var volumeSlice = parameters.volumeSlice;
-				if (volumeSlice) {
-					volumeSlice.removeListenerById(parameters.listenerId);
-				}
+
 				delete mesh.userData.__customProperties;
 				if (!doNotSetData) {
 					this.__setData();
@@ -883,11 +927,10 @@ qx.Class.define("desk.SceneContainer",
 				keepMaterial = parameters.keepMaterial;
 			}
 
-			this.getScene().remove(mesh);
-			if (!keepGeometry) {
+			if (!keepGeometry && dispose !== false) {
 				mesh.geometry.dispose();
 			}
-			if (!keepMaterial) {
+			if (!keepMaterial && dispose !== false) {
 				var map = mesh.material.map;
 				if (map) {
 					map.dispose();
@@ -905,7 +948,9 @@ qx.Class.define("desk.SceneContainer",
 			}
 			//mesh.dispose();
 			this.fireDataEvent("meshRemoved", mesh);
-			this._deleteMembers(mesh);
+			if (dispose !== false) {
+				this._deleteMembers(mesh);
+			}
         },
 
 		__animator : null,
@@ -927,7 +972,7 @@ qx.Class.define("desk.SceneContainer",
 				} else {
 					numVertices = geometry.attributes.position.numItems / 3;
 					if (geometry.attributes.index) {
-						numTriangles = geometry.attributes.index.numItems / 3;
+						numTriangles = geometry.attributes.index.array.length / 3;
 					}
 				}
 				alert ("Mesh with " + numVertices + " vertices and " +
@@ -963,21 +1008,26 @@ qx.Class.define("desk.SceneContainer",
 			var edgesButton = new qx.ui.menu.Button("show/hide edges");
 			edgesButton.addListener("execute", function (){
 				var self = this;
+
+				function removeEdges() {
+					var edges = this.userData.edges;
+					self.getScene().remove(edges);
+					edges.geometry.dispose();
+					self._deleteMembers(edges);
+					this.removeEventListener("removedFromScene", removeEdges);
+					delete this.userData.edges;
+				}
+
                 this.getSelectedMeshes().forEach(function (mesh) {
 					var edges = mesh.userData.edges;
 					if (edges) {
-						self.getScene().remove(edges);
-						edges.geometry.dispose();
-						self._deleteMembers(edges);
-						delete mesh.userData.edges;
+						removeEdges.apply(mesh)
 					} else {
 						edges = new THREE.WireframeHelper(mesh);
 						var material = edges.material;
 						material.color.setRGB(0,0,0);
-						material.polygonOffset = true;
-						material.polygonOffsetFactor = 0;
-						material.polygonOffsetUnits = 0;
 						mesh.userData.edges = edges;
+						mesh.addEventListener("removedFromScene", removeEdges);
 						self.getScene().add(edges);
 					}
 				});
@@ -1035,18 +1085,16 @@ qx.Class.define("desk.SceneContainer",
 				if (!selNode) {
 					return;
 				}
+
+				var visibility = "visible"
 				var leaf = this.__meshesTree.nodeGet(selNode);
-				var visibility = "visible";
-				if (leaf) {
-					if (leaf.__customProperties) {
-						if(leaf.__customProperties.volumeSlice) {
-							visibility = "excluded";
-						}
-					}
+				if(leaf && leaf.__customProperties && leaf.__customProperties.volumeSlice) {
+					visibility = "excluded";
 				}
-				for (var i = 0; i < optionalButtons.length; i++) {
-					optionalButtons[i].setVisibility(visibility);
-				}
+
+				optionalButtons.forEach(function (button) {
+					button.setVisibility(visibility);
+				});
 			}, this);
 
 			qx.util.DisposeUtil.disposeTriggeredBy(menu, this);

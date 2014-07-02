@@ -2,7 +2,7 @@
 * @ignore(Uint8Array)
 * @lint ignoreDeprecated(alert)
 * @asset(desk/Contrast_Logo_petit.PNG)
-* @ignore (async.each)
+* @ignore (async.eachSeries)
 */
 qx.Class.define("desk.MPRContainer", 
 {
@@ -67,7 +67,7 @@ qx.Class.define("desk.MPRContainer",
 			qx.util.DisposeUtil.destroyContainer(this.__orientationContainer);
 		}
 
-		this.applyToViewers(function (viewer) {
+		this.getViewers().forEach(function (viewer) {
 			viewer.dispose();
 		});
 
@@ -148,23 +148,6 @@ qx.Class.define("desk.MPRContainer",
 		},
 
 		/**
-		* applies the input function to all viewers
-		* @param iterator {Function} iterator to apply to viewers
-		* <pre class="javascript">
-		* example :
-		* myMPRContainer.applyToViewers(function (viewer) {
-		* 	viewer.render();
-		* });
-		* </pre>
-		* */
-		applyToViewers : function (iterator) {
-			var viewers = this.__viewers;
-			for (var i = 0; i < this.__nbUsedOrientations;i ++) {
-				iterator(viewers[i]);
-			}
-		},
-
-		/**
 		 * Returns the container of volume items
 		 * @return {qx.ui.container.Composite} Volumes container
 		 */
@@ -181,25 +164,22 @@ qx.Class.define("desk.MPRContainer",
 		},
 
 		__renderAll : function () {
-			this.applyToViewers(function (viewer) {
+			this.getViewers().forEach(function (viewer) {
 				viewer.render();
 			});
 		},
 
 		__reorderMeshes : function () {
-			var volumes = this.__volumes.getChildren();
-			for (var i = 0; i < volumes.length; i++) {
-				var slices = this.getVolumeSlices(volumes[i]);
-				for (var j = 0; j < slices.length; j++){
-                    var slice = slices[j];
+			this.__volumes.getChildren().forEach(function (volume, rank) {
+				this.getVolumeSlices(volume).forEach(function (slice) {
                     // slice might not be loaded yet
 					if (slice) {
-						this.applyToViewers(function (viewer) {
-							viewer.setSliceRank(slice, i);
+						this.getViewers().forEach(function (viewer) {
+							viewer.setSliceRank(slice, rank);
 						});
 					}
-				}
-			}
+				}, this);
+			}, this);
 			this.__renderAll();
 		},
 
@@ -262,7 +242,7 @@ qx.Class.define("desk.MPRContainer",
 		__onChangeCrossPosition : function (e) {
 			var sliceView = e.getTarget();
 			var position = sliceView.getCrossPosition();
-			this.applyToViewers(function (viewer) {
+			this.getViewers().forEach(function (viewer) {
 				viewer.setCrossPosition(position.i, position.j, position.k);
 			});
 		},
@@ -270,7 +250,7 @@ qx.Class.define("desk.MPRContainer",
 		__onChangeCameraZ : function (e) {
 			var sliceView = e.getTarget();
 			var z = e.getData();
-			this.applyToViewers (function (viewer) {
+			this.getViewers().forEach (function (viewer) {
 				if (viewer != sliceView) {
 					var oldZ = viewer.getCameraZ();
 					if (oldZ * z < 0) {
@@ -425,7 +405,7 @@ qx.Class.define("desk.MPRContainer",
 			anamOrButton.setUserData('flipCamera', false);
 			function changeFlipStrategy (e) {
 				var flipCamera = e.getTarget().getUserData('flipCamera');
-				this.applyToViewers(function (viewer) {
+				this.getViewers().forEach(function (viewer) {
 					viewer.applyToLinks(function () {
 						this.setOrientationChangesOperateOnCamera(flipCamera);
 					});
@@ -502,6 +482,13 @@ qx.Class.define("desk.MPRContainer",
         * @return {qx.ui.container.Composite}  volume item
 		*/
 		addVolume : function (file, options, callback) {
+			if (desk.FileSystem.getFileExtension(file) === "json") {
+				desk.FileSystem.readFile(file, function (err, viewpoints) {
+					this.setViewPoints(viewpoints.viewpoints);
+				}.bind(this));
+				return;
+			}
+
 			var volumeSlices = [];
 
 			var opacity = 1;
@@ -570,8 +557,7 @@ qx.Class.define("desk.MPRContainer",
             label.setTextAlign("left");
 			labelcontainer.add(label, {flex : 1});
 
-			var _this = this;
-			async.each(this.__viewers,
+			async.eachSeries(this.__viewers,
 				function (viewer, callback) {
 					volumeSlices[viewer.getOrientation()] = viewer.addVolume(
 							file,
@@ -587,13 +573,13 @@ qx.Class.define("desk.MPRContainer",
 //					updateWindowLevel();
 					volumeListItem.setUserData("loadingInProgress", false);
 					if (volumeListItem.getUserData("toDelete")) {
-						_this.removeVolume(volumeListItem);
+						this.removeVolume(volumeListItem);
 					}
-					_this.__reorderMeshes();
+					this.__reorderMeshes();
 					if (typeof callback === 'function') {
 						callback(volumeListItem);
 					}					
-				}
+				}.bind(this)
 			);
 
 			var settingsContainer = new qx.ui.container.Composite();
@@ -675,7 +661,7 @@ qx.Class.define("desk.MPRContainer",
 					var brightness = volumeSlices[0].getBrightness();
 
 					brightness -= deltaY / 300;
-					contrast += deltaX / 200;
+					contrast *= 1 + deltaX / 300;
 					x = newX;
 					y = newY;
 					for (var i = 0; i < volumeSlices.length; i++) {
@@ -769,11 +755,23 @@ qx.Class.define("desk.MPRContainer",
 
 			if(this.__standalone) {
 				if (desk.Actions.getInstance().getPermissionsLevel()>0) {
-					var segmentButton = new qx.ui.menu.Button("segment");
+					var segmentButton = new qx.ui.menu.Button("segment(GC)");
 					segmentButton.addListener("execute", function () {
 						new desk.SegTools(this, this.getVolumeFile(volumeListItem));
 					},this);
 					menu.add(segmentButton);
+
+					var segmentButtonGC = new qx.ui.menu.Button("segment");
+					segmentButtonGC.addListener("execute", function () {
+						new desk.SegTools(this, this.getVolumeFile(volumeListItem), {segmentationMethod : 1});
+					},this);
+					menu.add(segmentButtonGC);
+
+					var editButton = new qx.ui.menu.Button("edit");
+					editButton.addListener("execute", function () {
+						new desk.SegTools(this, this.getVolumeFile(volumeListItem), {segmentationMethod : 2});
+					},this);
+					menu.add(editButton);
 				}
 			}
 
@@ -823,6 +821,42 @@ qx.Class.define("desk.MPRContainer",
 		},
 
 		/**
+		 * Returns an object containing all viewpoints informations : 
+		 * slices, camera positions.
+		 * @return{Array} viewpoints for each viewer
+		 */
+		getViewPoints : function () {
+			var viewPoints = [];
+			this.__viewers.forEach(function (viewer, index) {
+				var volume = viewer.getFirstSlice();
+				var ZIindex = volume.getZIndex();
+				var position = volume.getOrigin()[ZIindex] + 
+					viewer.getSlice() * volume.getSpacing()[ZIindex];
+				viewPoints[index] = {
+					position : position,
+					cameraState : viewer.getControls().getState()
+				};
+			});
+			return viewPoints;
+		},
+
+		/**
+		 * Sets all viewpoints: slices, camera positions.
+		 * @param viewPoints {Array} viewpoints for each viewer
+		 */
+		setViewPoints : function (viewPoints) {
+			this.__viewers.forEach(function (viewer, index) {
+				var volume = viewer.getFirstSlice();
+				var ZIindex = volume.getZIndex();
+				var viewPoint = viewPoints[index];
+				viewer.setSlice(Math.round((viewPoint.position - volume.getOrigin()[ZIindex]) / 
+					volume.getSpacing()[ZIindex]));
+				viewer.getControls().setState(viewPoint.cameraState);
+				viewer.render();
+			});
+		},
+
+		/**
 		 * Reloads all volumes
 		 */
 		updateAll : function () {
@@ -864,7 +898,7 @@ qx.Class.define("desk.MPRContainer",
 			}
 
 			var slices = this.getVolumeSlices(volume);
-			this.applyToViewers (function (viewer) {
+			this.getViewers().forEach (function (viewer) {
 				viewer.removeVolumes(slices);
 			});
 
@@ -879,8 +913,9 @@ qx.Class.define("desk.MPRContainer",
 		__getToolBar : function () {
 			var container = new qx.ui.container.Composite();
 			container.setLayout(new qx.ui.layout.HBox());
-			container.add(this.getUpdateButton(this.updateAll, this));
+//			container.add(this.getUpdateButton(this.updateAll, this));
 			container.add(this.__getLinkButton());
+			container.add(this.__getSaveViewButton());
 			container.add(new qx.ui.core.Spacer(10), {flex: 1});
 			container.add(this.__getOrientationButton());
 			return (container);
@@ -990,11 +1025,27 @@ qx.Class.define("desk.MPRContainer",
 			}
 		},
 
+		__getSaveViewButton : function () {
+			var button = new qx.ui.form.Button("save view");
+			button.addListener("execute", function () {
+				var file = prompt("Enter file name to save camera view point", "data/viewpoints.json")
+				if (file != null) {
+					button.setEnabled(false);
+					desk.FileSystem.writeFile(file,
+						JSON.stringify({viewpoints : this.getViewPoints()}), 
+						function () {
+							button.setEnabled(true);
+					});
+				}
+			}, this);
+			return button;
+		},
+
 		__getLinkButton : function () {
 			var menu = new qx.ui.menu.Menu();
 			var unLinkButton = new qx.ui.menu.Button("unlink");
 			unLinkButton.addListener("execute", function() {
-				this.applyToViewers (function (viewer) {
+				this.getViewers().forEach (function (viewer) {
 					viewer.unlink();
 				});
 			},this);
@@ -1140,16 +1191,15 @@ qx.Class.define("desk.MPRContainer",
 
 		__onDrop : function (e) {
 			if (e.supportsType("fileBrowser")) {
-				var files = e.getData("fileBrowser").getSelectedFiles();
-				for (var i = 0; i < files.length; i++) {
-					this.addVolume(files[i]);
-				}
+				e.getData("fileBrowser").getSelectedFiles().forEach(function(file) {
+					this.addVolume(file);
+				}, this);
 			} else if (e.supportsType("file")) {
 				if (e.supportsType("VolumeViewer")) {
 					if (this == e.getData("VolumeViewer")) {
 						return;
 					}
-				}						
+				}
 				this.addVolume(e.getData("file"));
 			}
 		}

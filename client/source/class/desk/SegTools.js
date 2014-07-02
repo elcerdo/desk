@@ -2,15 +2,21 @@
 * @ignore(Uint8Array)
 * @lint ignoreDeprecated(alert)
 * @lint ignoreDeprecated(confirm)
+* @ignore (async.each)
+* @ignore (_.find)
 */
 
 qx.Class.define("desk.SegTools",
 {
   extend : qx.ui.window.Window,
 
-	construct : function(master, globalFile)
-	{	
+	construct : function(master, globalFile, options) {	
 		this.base(arguments);
+		this.setAlwaysOnTop(true)
+		options = options || {};
+
+		this.__segmentationMethod = options.segmentationMethod || 0;
+
 		this.__master = master;
 		this.__file = globalFile;
 
@@ -26,29 +32,27 @@ qx.Class.define("desk.SegTools",
 			allowMaximize: false,
 			showClose: true,
 			movable : true,
-			caption :"segmentation tool",
 			resizable : [false, false, false, false]
 		});
 
-		this.__buildActions();
 
-		var _this = this;
+		this.__buildActionsContainers();
+
 		var listenersIds = [];
-		master.applyToViewers(function (viewer) {
+		master.getViewers().forEach(function (viewer) {
 			listenersIds[viewer] = viewer.addListener("changeSlice", function ( event ) {
-				_this.__saveCurrentSeeds();
-				_this.__reloadSeedImage( viewer );
-			}, viewer);
-		});
+				this.__saveCurrentSeeds();
+				this.__reloadSeedImage( viewer );
+			}, this);
+		}, this);
 
 		this.addListener("close", function (e) {
-			master.applyToViewers(function (viewer) {
+			master.getViewers().forEach(function (viewer) {
 				viewer.removeListenerById(listenersIds[viewer]);
 				viewer.setPaintMode(false);
 				viewer.setEraseMode(false);
 				var canvas = viewer.getDrawingCanvas();
-				canvas.getContext2d().clearRect(0,0,
-							canvas.getCanvasWidth(), canvas.getCanvasHeight());
+				canvas.getContext2d().clearRect(0, 0, canvas.getCanvasWidth(), canvas.getCanvasHeight());
 				viewer.fireEvent("changeDrawing");
 			});
 		});
@@ -69,9 +73,7 @@ qx.Class.define("desk.SegTools",
 		'</adjacencies>',
 		'</colors>'].join('\n'),
 		defaultColorsFile : null,
-		filePrefixes : ["seed","correction"],
-		seedsListsString : "seedsLists",
-		seedsArrayString : "seedsArray"
+		filePrefixes : ["seed","correction"]
 	},
 
 	events : {
@@ -84,17 +86,15 @@ qx.Class.define("desk.SegTools",
 		seedsType : { init : 0, check: "Number", event : "changeSeedsType"}
 	},
 
-	members :
-	{
+	members : {
+		__segmentationMethod : 0,
 		__master : null,
 		__file : null,
-		__topRightContainer : null,
-		__bottomRightContainer : null,
-		__mainBottomRightContainer : null,
+		__paintContainer : null,
+		__bottomContainer : null,
 		__colorsContainer : null,
-		__seedsTypeSelectBox : null,
 
-		__startSegmentationButton : null,
+		__startButton : null,
 
 // Tableau contenant les couleurs des seeds
          __labels : null,
@@ -110,7 +110,6 @@ qx.Class.define("desk.SegTools",
 
 		__penSize : null,
 		__eraserButton : null,
-		__eraserCursor : null,
 
 		__meshViewer : null,
 
@@ -121,45 +120,46 @@ qx.Class.define("desk.SegTools",
 		__reloadSeedImage : function (sliceView) {
 			if (this.getSessionDirectory() == null)
 				return;
-			var _this = this;
 			var canvas = sliceView.getDrawingCanvas();
 			var width = canvas.getCanvasWidth()
 			var height = canvas.getCanvasHeight()
 
 			var context = canvas.getContext2d();
 			context.clearRect(0, 0, width, height);
-			var seedsType = _this.getSeedsType();
-			var seedsList = sliceView.getUserData(desk.SegTools.seedsListsString)[seedsType];
-			var seedsArray = seedsList.getUserData(desk.SegTools.seedsArrayString);
-			var sliceId=sliceView.getSlice();
+			var seedsType = this.getSeedsType();
+			var seedsList = sliceView.getUserData("seeds")[seedsType];
+			var sliceId = sliceView.getSlice();
 
-			if (seedsArray[sliceId] != 0) {
+			var seed = _.find(seedsList.getChildren(), function (seed) {
+				return seed.getUserData("slice") === sliceId;
+			});
+
+			if (seed) {
 				var imageLoader = new Image();
-				seedsList.setSelection([seedsArray[sliceId]]);
+				seedsList.setSelection([seed]);
 				imageLoader.onload = function(){
 					context.drawImage(imageLoader, 0, 0);
 					sliceView.fireEvent("changeDrawing");
 					imageLoader.onload = 0;
 				}
-				imageLoader.src = desk.FileSystem.getFileURL(_this.getSessionDirectory()) + "/" +
-								_this.__getSeedFileName (sliceView, sliceId, seedsType) +
-								"?nocache=" + Math.random();
+				imageLoader.src = desk.FileSystem.getFileURL(this.getSessionDirectory()) + "/" +
+					this.__getSeedFileName (sliceView, sliceId, seedsType) +
+					"?nocache=" + Math.random();
 			} else {
 				seedsList.resetSelection();
 				sliceView.fireEvent("changeDrawing");
 			}
 		},
 
-		__buildActions : function() {	
-			var volFile = this.__file;
+		__buildActionsContainers : function() {	
 			var spacing = 5;
 			var tRCL = new qx.ui.layout.HBox();
 			tRCL.setSpacing(spacing);
-			this.__topRightContainer = new qx.ui.container.Composite(tRCL);
+			this.__paintContainer = new qx.ui.container.Composite(tRCL);
 
-			var bRCL=new qx.ui.layout.HBox();
+			var bRCL = new qx.ui.layout.HBox();
 			bRCL.setSpacing(spacing);
-			this.__bottomRightContainer= new qx.ui.container.Composite(bRCL);
+			this.__bottomContainer = new qx.ui.container.Composite(bRCL);
 
 			////Create pen size chose widget
             this.__penSize = new qx.ui.form.Spinner().set({
@@ -169,31 +169,31 @@ qx.Class.define("desk.SegTools",
             });
 			
             this.__penSize.addListener("changeValue", function(event) {
-				this.__master.applyToViewers(function (viewer) {
+				this.__master.getViewers().forEach(function (viewer) {
 					viewer.setPaintWidth(event.getData());
 				});
 			}, this);
             this.__penSize.setValue(5);
 			
 			var penLabel = new qx.ui.basic.Label("Brush : ");
-			this.__topRightContainer.add(penLabel);
-			this.__topRightContainer.add(this.__penSize);
+			this.__paintContainer.add(penLabel);
+			this.__paintContainer.add(this.__penSize);
 			
 			////Create eraser on/off button
             this.__eraserButton = new qx.ui.form.ToggleButton("Eraser");
 			this.__eraserButton.addListener("changeValue", function(e) {
-				this.__master.applyToViewers(function (viewer) {
+				this.__master.getViewers().forEach(function (viewer) {
 					viewer.setEraseMode(e.getData());
 				});
 			}, this);
-			this.__topRightContainer.add(this.__eraserButton);
+			this.__paintContainer.add(this.__eraserButton);
 
 			////Create labels zone
 			var paintPage = new qx.ui.tabview.Page("paint");
 			var paintPageLayout = new qx.ui.layout.VBox();
-			paintPageLayout.setSpacing(5);
+			paintPageLayout.setSpacing(spacing);
             paintPage.setLayout(paintPageLayout);
-			paintPage.add(this.__topRightContainer);
+			paintPage.add(this.__paintContainer);
 
 			this.__colorsContainer = new qx.ui.container.Composite();
             this.__colorsContainer.setLayout(new qx.ui.layout.Grid(1,1));
@@ -205,66 +205,254 @@ qx.Class.define("desk.SegTools",
 			}, this);
 			paintPage.add(this.__colorsContainer);
 
-			var bRCL = new qx.ui.layout.HBox();
-			bRCL.setSpacing(spacing);
-			this.__mainBottomRightContainer = new qx.ui.container.Composite(bRCL);
-			
-			var tabView = new desk.TabView();
-			this.__tabView = tabView;
+			var tabView = this.__tabView = new desk.TabView();;
             tabView.add(paintPage);
 			tabView.setVisibility("excluded");
 
-			var sessionWdgt = this.__getSessionsWidget();
-			this.__addSeedsListsToViews();
-			this.add(sessionWdgt);
-			
-			this.add(this.__mainBottomRightContainer, {flex : 1});
+			switch (this.__segmentationMethod) {
+				case 2:
+					this.__buildActionsEdit();
+					this.setCaption("Edition Tool");
+					this.__sessionType = "edit";
 
-			this.__mainBottomRightContainer.add(tabView);
+					break;
+				case 1:
+					this.__buildActions();
+					this.setCaption("Segmentation tool (Region Growing)");
+					this.__sessionType = "gcSegmentation";
+					break;
+				case 0:
+				default:
+					this.__buildActionsGC();
+					this.setCaption("Segmentation tool (Graph Cuts)");
+					this.__sessionType = "gcSegmentation";
+			}
+
+			this.add(this.__getSessionsWidget());
+			this.add(tabView, {flex : 1});
+
+			this.__master.getViewers().forEach (function (viewer) {
+				this.__addSeedsLists (viewer);
+			}, this);
 			
 			var whileDrawingDrwngOpacityLabel = new qx.ui.basic.Label("Opacity :");
-			this.__topRightContainer.add(whileDrawingDrwngOpacityLabel);
+			this.__paintContainer.add(whileDrawingDrwngOpacityLabel);
 			
             var whileDrawingDrwngOpacitySlider = new qx.ui.form.Slider();
 			whileDrawingDrwngOpacitySlider.setValue(100);
 			whileDrawingDrwngOpacitySlider.addListener("changeValue", function(event) {
-				this.__master.applyToViewers(function (viewer) {
+				this.__master.getViewers().forEach(function (viewer) {
 					viewer.setPaintOpacity(event.getData() / 100);
 				});
 			}, this);
 
-            this.__topRightContainer.add(whileDrawingDrwngOpacitySlider, {flex : 1});
+            this.__paintContainer.add(whileDrawingDrwngOpacitySlider, {flex : 1});
 
-			paintPage.add(this.__bottomRightContainer);
+			paintPage.add(this.__bottomContainer);
+			paintPage.addAt(this.__getSeedsTypeSelectBox(), 0);
+		},
 
-			var clusteringAction = new desk.Action("cvtseg2", {standalone : false});
-			clusteringAction.setActionParameters({"input_volume" : volFile});
-			clusteringAction.setOutputSubdirectory("clustering");
-			clusteringAction.buildUI();
-			tabView.addElement('clustering', clusteringAction.getTabView());
-
-			var segmentationAction = new desk.Action("cvtgcmultiseg",
-				{standalone : false});
-			clusteringAction.setActionParameters({
-				"input_volume" : volFile});
-			segmentationAction.setOutputSubdirectory("segmentation");
-			segmentationAction.connect("clustering", clusteringAction,
-				"clustering-index.mhd");
-			segmentationAction.buildUI();
-			tabView.addElement('segmentation', segmentationAction.getTabView());
-
-			var medianFilteringAction = new desk.Action(
-				"volume_median_filtering", {standalone : false});
-			medianFilteringAction.setOutputSubdirectory("filtering");
-			medianFilteringAction.connect("input_volume", 
-				segmentationAction, "seg-cvtgcmultiseg.mhd");
-			medianFilteringAction.buildUI();
-			tabView.addElement('cleaning', medianFilteringAction.getTabView());
+		__buildActionsEdit : function () {
+			var applySeedsAction = new desk.Action("applyseeds", {standalone : false});
+			applySeedsAction.setActionParameters({"input_volume" : this.__file});
+			applySeedsAction.setOutputSubdirectory("edit");
+			applySeedsAction.buildUI();
+			this.__tabView.addElement('edit', applySeedsAction.getTabView());
 
 			var meshingAction = new desk.Action("extract_meshes", {standalone : false});
 			meshingAction.setOutputSubdirectory("meshes");
 			meshingAction.buildUI();
-			tabView.addElement('meshing', meshingAction.getTabView());
+			this.__tabView.addElement('meshing', meshingAction.getTabView());
+
+			this.addListener("changeSessionDirectory", function (e) {
+				var directory = e.getData();
+				if (segmentationToken != null) {
+					this.__master.removeVolume(segmentationToken);
+				}
+				applySeedsAction.setOutputDirectory(directory);
+				meshingAction.setOutputDirectory(directory);
+				applySeedsAction.setActionParameters({
+					"input_volume" : this.__file,
+					"seeds" : this.getSessionDirectory() + "/seeds.xml"
+				});
+				meshingAction.setActionParameters({
+					"input_volume" : applySeedsAction.getOutputDirectory() + "/output.mhd",
+					"colors" : this.getSessionDirectory() + "/seeds.xml"
+				});
+			}, this);
+
+			this.__startButton = new qx.ui.form.Button("Apply");
+			this.__startButton.addListener("execute", function () {
+				this.__startButton.setEnabled(false);
+				this.__segmentationInProgress = true;
+				this.__saveCurrentSeeds(function() {
+					applySeedsAction.executeAction();
+				});
+			}, this);
+			this.__bottomContainer.add(this.__startButton);
+
+			var meshingButton = new qx.ui.form.Button("extract meshes");
+			this.__extractMeshesButton = meshingButton;
+			meshingButton.addListener("execute", function () {
+				this.__startButton.setEnabled(false);
+				meshingButton.setEnabled(false);
+				this.__saveCurrentSeeds(function() {
+					meshingAction.executeAction();
+				});
+			}, this);
+			this.__bottomContainer.add(meshingButton);
+
+			var segmentationToken = null;
+			applySeedsAction.addListener("actionUpdated", function () {
+				this.__startButton.setEnabled(true);
+				if (!segmentationToken) {
+					segmentationToken = this.__master.addVolume(applySeedsAction.getOutputDirectory()+"output.mhd",
+						{opacity : 0.5, format : 0,
+						colors : [this.__labelColorsRed, this.__labelColorsGreen, this.__labelColorsBlue]});
+				} else {
+					this.__master.updateVolume(segmentationToken);
+				}
+
+				this.fireEvent("gotSegmentedVolume");
+			}, this);
+
+			this.__master.addListener("removeVolume", function (e) {
+				if (e.getData() == segmentationToken) {
+					segmentationToken = null;
+				}
+			});
+
+			meshingAction.addListener("actionUpdated", function () {
+				meshingButton.setEnabled(true);
+				this.__startButton.setEnabled(true);
+				if (!this.__meshViewer) {
+					this.__meshViewer = new desk.MeshViewer(this.getSessionDirectory() +
+						"/meshes/meshes.xml");
+					this.__meshViewer.addListener("close", function () {
+						this.__meshViewer = null;
+					}, this)
+				} else {
+					this.__meshViewer.update();
+				}
+
+				this.fireDataEvent("meshingActionUpdated", this.__meshViewer);
+			}, this);
+		},
+
+		__buildActions : function () {
+			var segmentationAction = new desk.Action("multiseg", {standalone : false});
+			segmentationAction.setActionParameters({"input_volume" : this.__file});
+			segmentationAction.setOutputSubdirectory("segmentation");
+			segmentationAction.buildUI();
+			this.__tabView.addElement('segmentation', segmentationAction.getTabView());
+
+			var meshingAction = new desk.Action("extract_meshes", {standalone : false});
+			meshingAction.setOutputSubdirectory("meshes");
+			meshingAction.buildUI();
+			this.__tabView.addElement('meshing', meshingAction.getTabView());
+
+			this.addListener("changeSessionDirectory", function (e) {
+				var directory = e.getData();
+				if (segmentationToken != null) {
+					this.__master.removeVolume(segmentationToken);
+				}
+				segmentationAction.setOutputDirectory(directory);
+				meshingAction.setOutputDirectory(directory);
+				segmentationAction.setActionParameters({
+					"input_volume" : this.__file,
+					"seeds" : this.getSessionDirectory() + "/seeds.xml"
+				});
+				meshingAction.setActionParameters({
+					"input_volume" : segmentationAction.getOutputDirectory() + "/output.mhd",
+					"colors" : this.getSessionDirectory() + "/seeds.xml"
+				});
+			}, this);
+
+			this.__startButton = new qx.ui.form.Button("Start segmentation");
+			this.__startButton.addListener("execute", function () {
+				this.__startButton.setEnabled(false);
+				this.__segmentationInProgress = true;
+				this.__saveCurrentSeeds(function() {
+					segmentationAction.executeAction();
+				});
+			}, this);
+			this.__bottomContainer.add(this.__startButton);
+
+			var meshingButton = new qx.ui.form.Button("extract meshes");
+			this.__extractMeshesButton = meshingButton;
+			meshingButton.addListener("execute", function () {
+				this.__startButton.setEnabled(false);
+				meshingButton.setEnabled(false);
+				this.__saveCurrentSeeds(function() {
+					meshingAction.executeAction();
+				});
+			}, this);
+			this.__bottomContainer.add(meshingButton);
+
+			var segmentationToken = null;
+			segmentationAction.addListener("actionUpdated", function () {
+				this.__startButton.setEnabled(true);
+				if (!segmentationToken) {
+					segmentationToken = this.__master.addVolume(segmentationAction.getOutputDirectory()+"output.mhd",
+						{opacity : 0.5, format : 0,
+						colors : [this.__labelColorsRed, this.__labelColorsGreen, this.__labelColorsBlue]});
+				} else {
+					this.__master.updateVolume(segmentationToken);
+				}
+
+				this.fireEvent("gotSegmentedVolume");
+			}, this);
+
+			this.__master.addListener("removeVolume", function (e) {
+				if (e.getData() == segmentationToken) {
+					segmentationToken = null;
+				}
+			});
+
+			meshingAction.addListener("actionUpdated", function () {
+				meshingButton.setEnabled(true);
+				this.__startButton.setEnabled(true);
+				if (!this.__meshViewer) {
+					this.__meshViewer = new desk.MeshViewer(this.getSessionDirectory() +
+						"/meshes/meshes.xml");
+					this.__meshViewer.addListener("close", function () {
+						this.__meshViewer = null;
+					}, this)
+				} else {
+					this.__meshViewer.update();
+				}
+
+				this.fireDataEvent("meshingActionUpdated", this.__meshViewer);
+			}, this);
+		},
+
+		__buildActionsGC : function() {	
+			var clusteringAction = new desk.Action("cvtseg2", {standalone : false});
+			clusteringAction.setActionParameters({"input_volume" : this.__file});
+			clusteringAction.setOutputSubdirectory("clustering");
+			clusteringAction.buildUI();
+			this.__tabView.addElement('clustering', clusteringAction.getTabView());
+
+			var segmentationAction = new desk.Action("cvtgcmultiseg",
+				{standalone : false});
+			clusteringAction.setActionParameters({"input_volume" : this.__file});
+			segmentationAction.setOutputSubdirectory("segmentation");
+			segmentationAction.connect("clustering", clusteringAction,
+				"clustering-index.mhd");
+			segmentationAction.buildUI();
+			this.__tabView.addElement('segmentation', segmentationAction.getTabView());
+
+			var medianFilteringAction = new desk.Action("volume_median_filtering", {standalone : false});
+			medianFilteringAction.setOutputSubdirectory("filtering");
+			medianFilteringAction.connect("input_volume", 
+				segmentationAction, "seg-cvtgcmultiseg.mhd");
+			medianFilteringAction.buildUI();
+			this.__tabView.addElement('cleaning', medianFilteringAction.getTabView());
+
+			var meshingAction = new desk.Action("extract_meshes", {standalone : false});
+			meshingAction.setOutputSubdirectory("meshes");
+			meshingAction.buildUI();
+			this.__tabView.addElement('meshing', meshingAction.getTabView());
 
 			this.addListener("changeSessionDirectory", function (e) {
 				var directory=e.getData();
@@ -276,11 +464,11 @@ qx.Class.define("desk.SegTools",
 				segmentationAction.setOutputDirectory(directory);
 				meshingAction.setOutputDirectory(directory);
 				segmentationAction.setActionParameters({
-					"input_volume" : volFile,
+					"input_volume" : this.__file,
 					"seeds" : this.getSessionDirectory() + "/seeds.xml"
 				});
 				clusteringAction.setActionParameters({
-					"input_volume" : volFile
+					"input_volume" : this.__file
 				});
 				meshingAction.setActionParameters({
 					"input_volume" : this.getSessionDirectory() + "/filtering/output.mhd",
@@ -288,27 +476,27 @@ qx.Class.define("desk.SegTools",
 				});
 			}, this);
 
-			this.__startSegmentationButton = new qx.ui.form.Button("Start segmentation");
-			this.__startSegmentationButton.addListener("execute", function () {
-				this.__startSegmentationButton.setEnabled(false);
+			this.__startButton = new qx.ui.form.Button("Start segmentation");
+			this.__startButton.addListener("execute", function () {
+				this.__startButton.setEnabled(false);
 				this.__segmentationInProgress = true;
 				this.__saveCurrentSeeds(function() {
 							medianFilteringAction.executeAction();});
 			}, this);
-			this.__bottomRightContainer.add(this.__startSegmentationButton);
+			this.__bottomContainer.add(this.__startButton);
 
 			var meshingButton = new qx.ui.form.Button("extract meshes");
 			this.__extractMeshesButton = meshingButton;
 			meshingButton.addListener("execute", function () {
-				this.__startSegmentationButton.setEnabled(false);
+				this.__startButton.setEnabled(false);
 				meshingButton.setEnabled(false);
 				meshingAction.executeAction();
-				}, this);
-			this.__bottomRightContainer.add(meshingButton);
+			}, this);
+			this.__bottomContainer.add(meshingButton);
 
 			var segmentationToken = null;
 			medianFilteringAction.addListener("actionUpdated", function () {
-				this.__startSegmentationButton.setEnabled(true);
+				this.__startButton.setEnabled(true);
 				if (!segmentationToken) {
 					segmentationToken = this.__master.addVolume(medianFilteringAction.getOutputDirectory()+"output.mhd",
 								{opacity : 0.5, format : 0,
@@ -328,7 +516,7 @@ qx.Class.define("desk.SegTools",
 
 			meshingAction.addListener("actionUpdated", function () {
 				meshingButton.setEnabled(true);
-				this.__startSegmentationButton.setEnabled(true);
+				this.__startButton.setEnabled(true);
 				if (!this.__meshViewer) {
 					this.__meshViewer = new desk.MeshViewer(this.getSessionDirectory() +
 						"/meshes/meshes.xml");
@@ -342,25 +530,21 @@ qx.Class.define("desk.SegTools",
 				this.fireDataEvent("meshingActionUpdated", this.__meshViewer);
 			}, this);
 
-			this.__seedsTypeSelectBox = this.__getSeedsTypeSelectBox();
-			paintPage.addAt(this.__seedsTypeSelectBox,0);
 		},
 
 		__rebuildLabelsList : function () {
-			var colors = this.__labels;
 			var row = 0;
 			var column = 0;
 			var numberOfColumns = 4;
 			this.__colorsContainer.removeAll();
-			for (var i=0; i < colors.length; i++) {	
-				var labelBox = colors[i].container;
-				this.__colorsContainer.add(labelBox, {column: column, row: row});
+			this.__labels.forEach(function (label) {
+				this.__colorsContainer.add(label.container, {column: column, row: row});
 				column++;
 				if (column >= numberOfColumns) {
 					column = 0;
 					row++;
 				}
-			}
+			}, this);
 			this.__buildLookupTables();
 		},
 
@@ -371,8 +555,7 @@ qx.Class.define("desk.SegTools",
 			this.__labelColorsRed = red;
 			this.__labelColorsGreen = green;
 			this.__labelColorsBlue = blue;
-			var i;
-			for (i = 0; i < 256; i++) {
+			for (var i = 0; i < 256; i++) {
 				red[i] = 0;
 				green[i] = 0;
 				blue[i] = 0;
@@ -380,15 +563,15 @@ qx.Class.define("desk.SegTools",
 			var colors = this.__labels;
 
 			// build compact lookuptables for seeds processing
-			var cRed=new Uint8Array (colors.length);
-			this.__compactLabelsRed=cRed;
-			var cGreen=new Uint8Array (colors.length);
-			this.__compactLabelsGreen=cGreen;
-			var cBlue=new Uint8Array (colors.length);
-			this.__compactLabelsBlue=cBlue;
+			var cRed = new Uint8Array (colors.length);
+			this.__compactLabelsRed = cRed;
+			var cGreen = new Uint8Array (colors.length);
+			this.__compactLabelsGreen = cGreen;
+			var cBlue = new Uint8Array (colors.length);
+			this.__compactLabelsBlue = cBlue;
 
 			for (i = 0; i < colors.length; i++) {
-				var label =colors[i].label;
+				var label = colors[i].label;
 				red[label] = colors[i].red;
 				green[label] = colors[i].green;
 				blue[label] = colors[i].blue;
@@ -409,8 +592,8 @@ qx.Class.define("desk.SegTools",
 				this.__labels[i].dispose();
 			}
 			this.__labels = [];
-			for(var i = 0; i < colors.length; i++)
-			{
+
+			for(var i = 0; i < colors.length; i++) {
 				var color = colors[i];
 				var label = parseInt(color.getAttribute("label"), 10)
 				var colorName = color.getAttribute("name");
@@ -425,8 +608,7 @@ qx.Class.define("desk.SegTools",
 					mColor[2] = Math.round(parseFloat(mColor[2])*255);
 					mColor[3] = parseFloat(mColor[3]);
 					mColor[4] = parseInt(mColor[4]);
-				}
-				else {
+				} else {
 					mColor=[255, 255, 255, 1, 0];
 				}
 				
@@ -434,8 +616,7 @@ qx.Class.define("desk.SegTools",
 						mColor[0],mColor[1],mColor[2],mColor[3],mColor[4]);
 			}
 			this.__rebuildLabelsList();
-			for (var i = 0; i < adjacencies.length; i++)
-			{
+			for (var i = 0; i < adjacencies.length; i++) {
 				var adjacency = adjacencies[i];
 				this.__addEdge(this.__getLabel(adjacency.getAttribute("label1")),
 						this.__getLabel(adjacency.getAttribute("label2")));
@@ -451,8 +632,7 @@ qx.Class.define("desk.SegTools",
 					this.__setColorsFromElements(xmlDoc.getElementsByTagName("color"),
 								xmlDoc.getElementsByTagName("adjacency"));
 				}
-			}
-			else {
+			} else {
 				desk.FileSystem.readFile(file, function (err, result) {
 					this.__setColorsFromElements(result.getElementsByTagName("color"),
 									result.getElementsByTagName("adjacency"));
@@ -552,7 +732,7 @@ qx.Class.define("desk.SegTools",
 					target.blue=colorSelector.getBlue();
 					target.updateWidget();
 			        colorView.setBackgroundColor(e.getData());
-					this.__master.applyToViewers(function (viewer) {
+					this.__master.getViewers().forEach(function (viewer) {
 						viewer.setPaintColor(colorSelector.getValue());
 					});
 				}
@@ -598,10 +778,8 @@ qx.Class.define("desk.SegTools",
 
 			container2.add(adjacenciesField, {flex : 2});
 
-			var _this=this;
-
-			function __updateAdjacenciesText () {
-				var adjacencies=_this.__targetColorItem.adjacencies;
+			var __updateAdjacenciesText = function () {
+				var adjacencies = this.__targetColorItem.adjacencies;
 				var children=adjacenciesField.getChildren();
 				while (children.length>0) {
 					children[0].destroy();
@@ -613,7 +791,7 @@ qx.Class.define("desk.SegTools",
 					listItem.setUserData("AdjacenciesItem", neighbour);
 					adjacenciesField.add(listItem);
 				}
-			}
+			}.bind(this)
 
 			var removeButton=new qx.ui.form.Button("Remove Selection");
 			removeButton.addListener("execute", function () {
@@ -694,11 +872,8 @@ qx.Class.define("desk.SegTools",
 			}, this);
 			depthContainer.add(meshDepth);
 
-
-
 			this.__editionWindow=window;
 
-			var _this=this;
 			this.__updateEditionWindow=function (e) {
 				var target=this.__targetColorItem;
 				if (target!=null) {
@@ -750,22 +925,16 @@ qx.Class.define("desk.SegTools",
 		},
 
 		__addEdge : function (label1, label2) {
-			if (label1==label2) {
+			if (label1 == label2) {
 				alert ("error : trying to create self-loop adjacency : "+
-						label1.label+"-"+label2.label);
+						label1.label + "-" + label2.label);
 				return;
 			}
-			var adjacencies=label1.adjacencies;
-			var found=false;
-			for (var i=0;i<adjacencies.length;i++) {
-				if (adjacencies[i].label==label2.label) {
-					found=true;
-					break;
-				}
-			}
 
-			if (found) {
-				alert ("Error : adjacency "+label1.label+"-"+label2.label+" already exists");
+			if (_.find(label1.adjacencies, function (adjacency) {
+					return adjacency.label === label2.label
+				})) {
+				alert ("Error : adjacency " + label1.label + "-" + label2.label + " already exists");
 				return;
 			}
 			this.__addAdjacency(label1, label2);
@@ -773,15 +942,9 @@ qx.Class.define("desk.SegTools",
 		},
 
 		__removeEdge : function (label1, label2) {
-			var adjacencies=label1.adjacencies;
-			var found=false;
-			for (var i=0;i<adjacencies.length;i++) {
-				if (adjacencies[i]==label2) {
-					found=true;
-				}
-			}
-
-			if (!found) {
+			if (!_.find(label1.adjacencies, function (adjacency) {
+					return adjacency.label === label2.label
+				})) {
 				alert ("error : adjacency "+label1.label+"-"+label2.label+" does not exist");
 				return;
 			}
@@ -803,10 +966,10 @@ qx.Class.define("desk.SegTools",
 		},
 
 		__removeAdjacency : function (label1,label2) {
-			var adjacencies=label1.adjacencies;
-			for (var i=0;i<adjacencies.length;i++){
-				if (label2==adjacencies[i]) {
-					adjacencies.splice(i,1);
+			var adjacencies = label1.adjacencies;
+			for (var i = 0; i < adjacencies.length; i++){
+				if (label2 === adjacencies[i]) {
+					adjacencies.splice(i, 1);
 					return;
 				}
 			}
@@ -820,9 +983,8 @@ qx.Class.define("desk.SegTools",
 		__labelFocusedBorder : null,
 
 		__addColorItem : function(label, labelName, red, green, blue,
-					meshRed, meshGreen, meshBlue, opacity, depth)
-        {
-		////Function creates one label box
+					meshRed, meshGreen, meshBlue, opacity, depth) {
+			////Function creates one label box
 			var unfocusedBorder = this.__labelUnfocusedBorder;
             var focusedBorder = this.__labelFocusedBorder;
 			var boxWidth = 80;
@@ -843,20 +1005,18 @@ qx.Class.define("desk.SegTools",
                 height: 25,
                 alignX : "center"});
 
-			var listenerId=this.__eraserButton.addListener("changeValue", function (e) {
+			var listenerId = this.__eraserButton.addListener("changeValue", function (e) {
 				if (e.getData()){
 					labelBox.set({decorator: unfocusedBorder});
 				}
 			}, this);
 
-			labelBox.addListener("click", function(e)
-			{
+			labelBox.addListener("click", function(e) {
 				var paint = true;
 				if (this.__selectedLabel === labelBox) {
 					paint = false;
 					this.__selectedLabel = null;
-				}
-				else {
+				} else {
 					this.__selectedLabel = labelBox;
 					this.__eraserButton.setValue(false);
 					paint = true;
@@ -867,18 +1027,16 @@ qx.Class.define("desk.SegTools",
 				}
 
 				var children = this.__colorsContainer.getChildren();
-				for(var k = 0;  k < children.length; k++)
-				{
+				for(var k = 0;  k < children.length; k++) {
 					var label = children[k];
 					if(label === this.__selectedLabel) {
 						label.setDecorator(focusedBorder);
-					}
-					else {
+					} else {
 						label.setDecorator(unfocusedBorder);
 					}
 				}
 
-				this.__master.applyToViewers(function (viewer) {
+				this.__master.getViewers().forEach(function (viewer) {
 					viewer.setPaintColor(colorBox.getBackgroundColor());
 					viewer.setPaintMode(paint);
 					});
@@ -890,23 +1048,22 @@ qx.Class.define("desk.SegTools",
 				e.addType("segmentationLabel");
 			}, this);
 			labelBox.addListener("droprequest", function(e) {
-					var type = e.getCurrentType();
-					switch (type)
-					{
-					case "segmentationLabel":
-						e.addData(type, labelAttributes);
-						break;
-					default :
-						alert ("type "+type+"not supported for labels drag and drop");
-					}
+				var type = e.getCurrentType();
+				switch (type)
+				{
+				case "segmentationLabel":
+					e.addData(type, labelAttributes);
+					break;
+				default :
+					alert ("type "+type+"not supported for labels drag and drop");
+				}
 			}, this);
-
 
 			var boxLabel = new qx.ui.basic.Label().set({alignX:"left"});
 			labelBox.add(boxLabel);
 			labelBox.add(colorBox);
 
-			var labelAttributes={
+			var labelAttributes = {
 				red : red,
 				green : green,
 				blue : blue,
@@ -927,7 +1084,8 @@ qx.Class.define("desk.SegTools",
 															labelAttributes.blue]));
 					boxLabel.setValue(" "+labelAttributes.label + " : " + labelAttributes.labelName);
 					
-				}};
+				}
+			};
 			labelAttributes.updateWidget();
 
 			this.__labels.push(labelAttributes);
@@ -942,7 +1100,7 @@ qx.Class.define("desk.SegTools",
 				this.__editionWindow.open();
 				this.__targetColorItem=labelAttributes;
 				this.__updateEditionWindow();
-				},this);
+			},this);
 			menu.add(editButton);
 
 			var reorderButton = new qx.ui.menu.Button("reorder labels");
@@ -950,31 +1108,29 @@ qx.Class.define("desk.SegTools",
 			menu.add(reorderButton);
 
 			var addButton = new qx.ui.menu.Button("add new label");
-			addButton.addListener("execute", function (){
-				var colors=this.__labels;
-				var maxLabel=0;
-				for (var i=0;i<colors.length;i++) {
-					if (colors[i].label>maxLabel) {
-						maxLabel=colors[i].label;
+			addButton.addListener("execute", function () {
+				var colors = this.__labels;
+				var maxLabel = 0;
+				for (var i = 0; i < colors.length; i++) {
+					if (colors[i].label > maxLabel) {
+						maxLabel = colors[i].label;
 					}
 				}
-				this.__addColorItem (maxLabel+1, "edit me", 100, 100, 100,
-								100, 100, 100, 1, 0)
+				this.__addColorItem (maxLabel + 1, "edit_me", 100, 100, 100,
+					100, 100, 100, 1, 0)
 				this.__rebuildLabelsList();
-				},this);
+			}, this);
 			menu.add(addButton);
 
 			var removeButton = new qx.ui.menu.Button("remove");
-			removeButton.addListener("execute", function (){
+			removeButton.addListener("execute", function () {
 				this.__deleteColorItem(labelAttributes);
-				},this);
+			},this);
 			menu.add(removeButton);
 			labelBox.setContextMenu(menu);
 
-			labelAttributes.dispose=function () {
+			labelAttributes.dispose = function () {
 				labelBox.destroy();
-				unfocusedBorder.dispose();
-				focusedBorder.dispose();
 				labelLayout.dispose();
 				colorBox.destroy();
 				boxLabel.destroy();
@@ -987,13 +1143,11 @@ qx.Class.define("desk.SegTools",
 
 		loadSession : function() {
 			this.__clearSeeds();
-			var master = this.__master;
 
-			master.applyToViewers (function (viewer) {
+			this.__master.getViewers().forEach(function (viewer) {
 				viewer.setUserData("previousSlice", viewer.getSlice());
 			});
 
-			var _this = this;
 			desk.FileSystem.readFile(this.getSessionDirectory()+'/seeds.xml', function (err, response) {
 				if (!err) {
 					for (var k = 0; k < 2; k++) {
@@ -1012,30 +1166,30 @@ qx.Class.define("desk.SegTools",
 							} else {
 								sliceOrientation = 0;
 							}
-							master.applyToViewers (function (viewer) {
-								if(sliceOrientation == viewer.getOrientation())
-									_this.__addNewSeedItemToList(viewer, sliceId, k);
-							});
+							this.__master.getViewers().forEach (function (viewer) {
+								if(sliceOrientation == viewer.getOrientation()) {
+									this.__addNewSeedItemToList(viewer, sliceId, k);
+								}
+							}, this);
 						}
-						master.applyToViewers(function (viewer) {
-							_this.__reloadSeedImage( viewer );
-						});
+						this.__master.getViewers().forEach(function (viewer) {
+							this.__reloadSeedImage( viewer );
+						}, this);
 					}
 					var colors = response.getElementsByTagName("color");
 					var adjacencies = response.getElementsByTagName("adjacency");
 					if (colors.length > 0) {
-						_this.__setColorsFromElements(colors, adjacencies);
+						this.__setColorsFromElements(colors, adjacencies);
 					} else {
-						_this.__loadColors();
+						this.__loadColors();
 					}
 				} else {
-					_this.__loadColors();
+					this.__loadColors();
 				}
-			});
+			}.bind(this));
 		},
 
-		__getSessionsWidget : function()
-		{	
+		__getSessionsWidget : function() {	
 			var tools = this;
 			var volFile = this.__file;
 			var fileSystem = desk.FileSystem.getInstance();
@@ -1048,7 +1202,8 @@ qx.Class.define("desk.SegTools",
 			var button = new qx.ui.form.Button("new session");
 			sessionsListContainer.add(button);
 
-			var sessionType = "gcSegmentation";
+			var sessionType = this.__sessionType;
+
 			var sessionsList = new qx.ui.form.SelectBox();
 			sessionsListContainer.add(sessionsList);
 
@@ -1108,32 +1263,32 @@ qx.Class.define("desk.SegTools",
 					}
 					checkCPsession();
 				};
-
 				fileSystem.getFileSessions(volFile, sessionType, buildSessionsItems);
 			}
 			
-			sessionsList.addListener("changeSelection", function(e)
-			{
-				if (!updateInProgress)
-				{
-					var listItem=sessionsList.getSelection()[0];
-					if (listItem.getUserData("dummy")!=true)
-					{
-						tools.__tabView.setVisibility("visible");
-						tools.setSessionDirectory(fileSystem.getSessionDirectory(
-							volFile,sessionType,listItem.getLabel()));
-						if(rmSessCheckBox.getValue())
-							checkRmsession();
-						else
-							tools.loadSession();
+			sessionsList.addListener("changeSelection", function(e) {
+				if (updateInProgress) return;
+
+				var listItem = sessionsList.getSelection()[0];
+				if (listItem.getUserData("dummy")!=true) {
+					this.__tabView.setVisibility("visible");
+					this.setSessionDirectory(fileSystem.getSessionDirectory(
+						volFile,sessionType,listItem.getLabel()));
+					if(rmSessCheckBox.getValue()) {
+						checkRmsession();
+					} else {
+						this.loadSession();
 					}
-					sessionsList.close();
 				}
-			});
+				sessionsList.close();
+			}, this);
 
 			button.addListener("execute", function (e){
 				fileSystem.createNewSession(volFile,sessionType, updateList);
-				}, this);
+				this.addListenerOnce("changeSessionDirectory", function () {
+					this.__saveSeedsXML();
+				});
+			}, this);
 
 			updateList();
 			
@@ -1244,51 +1399,44 @@ qx.Class.define("desk.SegTools",
 		},
 
 		__saveCurrentSeeds : function(callback) {
+			callback = callback || function () {};
+			if (this.getSessionDirectory() === null) return;
+			var modified = false;
+			async.each(this.__master.getViewers(), (function (viewer, callback) {
+				if (viewer.isDrawingCanvasModified()) {
+					var base64Img = this.__getNewSeedsImage (viewer);
+					var sliceId = viewer.getUserData( "previousSlice" );
+					if (base64Img != false) {
+						modified = true;
+						// save image
+						var seedsType = this.getSeedsType();
 
-			if (this.getSessionDirectory()==null)
-				return;
+						this.__addNewSeedItemToList (viewer, sliceId, seedsType);
 
-			var numberOfRemainingSaves=1+this.__master.getViewers().length;
-
-			function savecallback () {
-				numberOfRemainingSaves--;
-				if ((numberOfRemainingSaves==0)&&
-					(typeof callback =="function")) {
+						desk.Actions.getInstance().launchAction({
+							action : "write_binary",
+							file_name : this.__getSeedFileName (viewer, sliceId, seedsType),
+							base64data : base64Img,
+							output_directory : this.getSessionDirectory()
+						}, callback);
+					} else {
 						callback();
 					}
-			}
-			
-        	var wasAnySeedModified = false;
-        	var _this = this;
-			this.__master.applyToViewers (function (viewer) {
-				var base64Img = _this.__getNewSeedsImage (viewer);
-				if (base64Img != false) {
-					// save image
-					var sliceId = viewer.getUserData( "previousSlice" );
-					var seedsType=_this.getSeedsType();
-
-					_this.__addNewSeedItemToList ( viewer, sliceId, seedsType );
-					wasAnySeedModified = true;
-
-					var parameterMap = {
-						action : "write_binary",
-						file_name : _this.__getSeedFileName (viewer, sliceId, seedsType),
-						base64data : base64Img,
-						output_directory : _this.getSessionDirectory()};
-						desk.Actions.getInstance().launchAction(parameterMap, savecallback);
+				} else {
+					callback();
 				}
-				else {
-					savecallback();
-				}
+				
 				viewer.setUserData("previousSlice", viewer.getSlice());
 				viewer.setDrawingCanvasNotModified();
-			});
-			if (wasAnySeedModified) {
-				this.__saveSeedsXML(savecallback);
-			}
-			else {
-				savecallback();
-			}
+			}).bind(this),
+			
+			(function () {
+				if (modified) {
+					this.__saveSeedsXML(callback);
+				} else {
+					callback();
+				}
+			}).bind(this));
 		},
 
 		////Rewrite xml list of the drawn seeds
@@ -1327,8 +1475,7 @@ qx.Class.define("desk.SegTools",
 					// Prefer the single quote unless forced to use double
 					if (quot_pos != -1 && quot_pos < apos_pos) {
 						use_quote = APOS;
-					}
-					else {
+					} else {
 						use_quote = QUOTE;
 					}
 					// Figure out which kind of quote to escape
@@ -1351,90 +1498,80 @@ qx.Class.define("desk.SegTools",
 				var xml;
 				if (!content){
 					xml='<' + name + att_str + '/>';
-				}
-				else {
+				} else {
 					xml='<' + name + att_str + '>' + content + '</'+name+'>';
 				}
 				return xml;
 			}
 
 			var xmlContent = '\n';
-			var colors="";
+			var colors = "";
 			var lColors = this.__labels;
 			var lColorsNb = lColors.length;
-			
-			for(var i=0; i<lColorsNb; i++)
-			{
-				var labelColor = lColors[i];
-				var meshColor=labelColor.meshRed/255+" "+
-								labelColor.meshGreen/255+" "+
-								labelColor.meshBlue/255+" "+
-								labelColor.opacity+" "+
-								labelColor.depth;
-				colors+=element('color',null, {red : ""+labelColor.red,
-												green: ""+labelColor.green,
-												blue : ""+labelColor.blue,
-												label : ""+labelColor.label,
-												name : ""+labelColor.labelName,
-												meshcolor : meshColor})+"\n";
-			}
-			xmlContent+=element('colors', colors)+"\n";
 
-			var adjacencies="\n";
-			var adjArray=[];
-			for(var i=0; i<lColorsNb; i++)
-			{
-				var label1=lColors[i].label;
-				var adj=lColors[i].adjacencies;
-				for (var j=0;j<adj.length;j++) {
-					var label2=adj[j].label;
-					var found=false;
-					for (var k=0;k<adjArray.length;k++) {
-						var edge=adjArray[k];
-						if (((edge.label1==label1)&&(edge.label2==label2))||
-							((edge.label1==label2)&&(edge.label2==label1))) {
-							found=true;
-							break;
-						}
-					}
-					if (!found) {
-						adjacencies+=element('adjacency',null, 
-							{label1 : ""+label1, label2 : ""+label2})+"\n";
+			for(var i = 0; i < lColorsNb; i++) {
+				var labelColor = lColors[i];
+				var meshColor = labelColor.meshRed/255 + " " +
+								labelColor.meshGreen/255 + " " +
+								labelColor.meshBlue/255 + " " +
+								labelColor.opacity + " " +
+								labelColor.depth;
+				colors+=element('color', null, {red : "" + labelColor.red,
+												green: "" + labelColor.green,
+												blue : "" + labelColor.blue,
+												label : "" + labelColor.label,
+												name : "" + labelColor.labelName,
+												meshcolor : meshColor}) + "\n";
+			}
+			xmlContent += element('colors', colors) + "\n";
+
+			var adjacencies = "\n";
+			var adjArray = [];
+			for(var i = 0; i < lColorsNb; i++) {
+				var label1 = lColors[i].label;
+				var adj = lColors[i].adjacencies;
+				for (var j = 0;j < adj.length; j++) {
+					var label2 = adj[j].label;
+
+					if (!_.find(adjArray, function (edge) {
+						return ((edge.label1 == label1) && (edge.label2 == label2)) ||
+							((edge.label1 == label2) && (edge.label2 == label1))
+						})) {
+						adjacencies += element('adjacency', null, 
+							{label1 : "" + label1, label2 : "" + label2}) + "\n";
 						adjArray.push({label1 : label1, label2 : label2});
 					}
 				}
 			}
 
-			if (adjArray.length>0) {
-				xmlContent+=element('adjacencies', adjacencies)+"\n";
+			if (adjArray.length > 0) {
+				xmlContent += element('adjacencies', adjacencies) + "\n";
 			}
 
-			var _this=this;
-			this.__master.applyToViewers( function (viewer) {
-				var seedsLists = viewer.getUserData(desk.SegTools.seedsListsString);
+			this.__master.getViewers().forEach( function (viewer) {
+				var seedsLists = viewer.getUserData("seeds");
 				var orientation = viewer.getOrientation();
 
 				for (var seedsType = 0; seedsType < 2; seedsType++) {
 					var list = seedsLists[seedsType];
 					var filePrefix = desk.SegTools.filePrefixes[seedsType];
 					var slices = list.getChildren();
-					for (var i = 0; i < slices.length; i++)
-					{
+					for (var i = 0; i < slices.length; i++) {
 						var sliceId = slices[i].getUserData("slice");
 						xmlContent += element(filePrefix,
-								_this.__getSeedFileName(viewer, sliceId, seedsType), 
-								{slice: sliceId + "", orientation: orientation + ""}) + '\n';
+							this.__getSeedFileName(viewer, sliceId, seedsType), 
+							{slice: sliceId + "", orientation: orientation + ""}) + '\n';
 					}
 				}
-			});
+			}, this);
 
-			var parameterMap={
+			var seeds = element('seeds', xmlContent);
+			desk.Actions.getInstance().launchAction({
 				action : "write_binary",
 				file_name : "seeds.xml",
-				base64data : qx.util.Base64.encode(element('seeds', xmlContent), true),
-				output_directory : this.getSessionDirectory()};
-
-			desk.Actions.getInstance().launchAction(parameterMap, callback);
+				base64data : qx.util.Base64.encode(seeds, true),
+				output_directory : this.getSessionDirectory()},
+			callback);
 		},
 
 		__getSeedsTypeSelectBox : function() {
@@ -1447,18 +1584,16 @@ qx.Class.define("desk.SegTools",
 			correctionsItem.setUserData("seedsType", 1);
 			selectBox.add(correctionsItem);
 
-			var _this=this;
-
-			function updateSeedsListsVisibility (e) {
+			var updateSeedsListsVisibility = function (e) {
 				var newSeedsType=selectBox.getSelection()[0].getUserData("seedsType");
-				_this.setSeedsType(newSeedsType);
-				_this.__master.applyToViewers(function (viewer) {
-					var seedsLists = viewer.getUserData(desk.SegTools.seedsListsString);
+				this.setSeedsType(newSeedsType);
+				this.__master.getViewers().forEach(function (viewer) {
+					var seedsLists = viewer.getUserData("seeds");
 					seedsLists[newSeedsType].setVisibility("visible");
 					seedsLists[1 - newSeedsType].setVisibility("excluded");
-					_this.__reloadSeedImage(viewer);
-					});
-			}
+					this.__reloadSeedImage(viewer);
+				}, this);
+			}.bind(this);
 
 			selectBox.addListener("changeSelection",updateSeedsListsVisibility);
 			updateSeedsListsVisibility();
@@ -1466,33 +1601,32 @@ qx.Class.define("desk.SegTools",
 		},
 
 		__getNewSeedsImage : function ( sliceView ) {
-			if (sliceView.isDrawingCanvasModified()==true) {
-				var canvas=sliceView.getDrawingCanvas();
-				var seedsImageData=canvas.getContext2d().getImageData(0, 0, canvas.getWidth(), canvas.getHeight());
+			if (sliceView.isDrawingCanvasModified() == true) {
+				var canvas = sliceView.getDrawingCanvas();
+				var seedsImageData = canvas.getContext2d().getImageData(0, 0, canvas.getWidth(), canvas.getHeight());
 				var pixels = seedsImageData.data;
 				var isAllBlack = true;
 
-				var redArray=this.__compactLabelsRed;
-				var greenArray=this.__compactLabelsGreen;
-				var blueArray=this.__compactLabelsBlue;
-				var numberOfColors=this.__compactLabelsRed.length;
+				var redArray = this.__compactLabelsRed;
+				var greenArray = this.__compactLabelsGreen;
+				var blueArray = this.__compactLabelsBlue;
+				var numberOfColors = this.__compactLabelsRed.length;
 
-				var numberOfBytes=pixels.length
-				for(var i=0; i<numberOfBytes; i+=4) {
-					if(128<=pixels[i+3])  //  if( color is solid not totally transparent, ie. alpha=0) <-> if( not background )
-					{
+				var numberOfBytes = pixels.length
+				for(var i = 0; i < numberOfBytes; i += 4) {
+					if(128 <= pixels[i + 3]) {
 						var dRed = 0;
 						var dGreen = 0;
 						var dBlue = 0;
 						var distance = 500000;
 						var rightColorIndex = 0;
 
-						for(var j=0; j!=numberOfColors; j++) {
-							dRed = redArray[j]-pixels[i];
-							dGreen = greenArray[j]-pixels[i+1];
-							dBlue = blueArray[j]-pixels[i+2];
-							var testD = dRed*dRed+dGreen*dGreen+dBlue*dBlue;
-							if(testD<distance) {
+						for(var j = 0; j != numberOfColors; j++) {
+							dRed = redArray[j] - pixels[i];
+							dGreen = greenArray[j] - pixels[i + 1];
+							dBlue = blueArray[j] - pixels[i + 2];
+							var testD = dRed * dRed + dGreen * dGreen + dBlue * dBlue;
+							if(testD < distance) {
 								distance = testD;
 								rightColorIndex = j;
 							}
@@ -1502,9 +1636,7 @@ qx.Class.define("desk.SegTools",
 						pixels[i+2] = blueArray[rightColorIndex];
 						pixels[i+3] = 255;
 						isAllBlack = false;
-					}
-					////Comment "else" to send combined image
-					else {
+					} else {
 						pixels[i] = 0;
 						pixels[i+1] = 0;
 						pixels[i+2] = 0;
@@ -1513,13 +1645,12 @@ qx.Class.define("desk.SegTools",
 				}
 
 				if(!isAllBlack) {
-					////Send png image to server
 					seedsImageData.data = pixels;
 
 					canvas.getContext2d().putImageData(seedsImageData, 0, 0);
 					var pngImg = canvas.getContentElement().getCanvas().toDataURL("image/png");
-					var saveData=pngImg.replace("image/png", "image/octet-stream");
-					var commaIndex=pngImg.lastIndexOf(",");
+					var saveData = pngImg.replace("image/png", "image/octet-stream");
+					var commaIndex = pngImg.lastIndexOf(",");
 					var base64Img = pngImg.substring(commaIndex+1,pngImg.length);
 					return base64Img;
 				}
@@ -1527,110 +1658,78 @@ qx.Class.define("desk.SegTools",
 			return false;
 		},
 
-		__addSeedsListsToViews : function ( ) {
-			var _this=this;
-			this.__master.applyToViewers (function (viewer) {
-				_this.__addSeedsLists (viewer);
-			});
-		},
-
 		__addSeedsLists : function( sliceView ) {
-			// create seeds list
-			var seedsList=new qx.ui.form.List();
-			seedsList.setWidth(30);
-			seedsList.setScrollbarY("off");
-			sliceView.add(seedsList);
-			seedsList.setVisibility("excluded");
+			var seedsList = new qx.ui.form.List();
+			var correctionsList = new qx.ui.form.List();
+			var lists = [seedsList, correctionsList];
+			sliceView.setUserData("seeds", lists);
 
-			// create corrections list
-			var correctionsList=new qx.ui.form.List();
-			correctionsList.setWidth(30);
-			correctionsList.setScrollbarY("off");
-			sliceView.add(correctionsList);
-			correctionsList.setVisibility("excluded");
-
-			var lists=[];
-			lists.push(seedsList);
-			lists.push(correctionsList);
-			sliceView.setUserData(desk.SegTools.seedsListsString, lists);
-
-		/*	seedsList.addListener("removeItem", function(event) {
-				if (seedsList.getChildren().length==0)
-					this.__startSegmentationButton.setEnabled(false);
-				}, this);
-
-			seedsList.addListener("addItem", function(event) {
-				this.__startSegmentationButton.setEnabled(true);
-				}, this);*/
+			function stopPropagation (e) {e.stopPropagation();}
 
 			function keyPressHandler (event) {
-				if(event.getKeyIdentifier()=="Delete") {
+				if(event.getKeyIdentifier() == "Delete") {
 					var seedsType = this.getSeedsType();
-					var list=lists[seedsType];
+					var list = lists[seedsType];
 					var selectedChild = list.getSelection()[0];
-					if (selectedChild!=null) {
+					if (selectedChild) {
 						var sliceId = selectedChild.getUserData("slice");
 
 						////Erase image on the server
 						desk.Actions.getInstance().launchAction({action : "delete_file",
-										"file_name" : this.getSessionDirectory()+"/"+
-										this.__getSeedFileName(sliceView, sliceId, seedsType)});
-						list.getUserData("seedsArray")[sliceId]=0;
+							"file_name" : this.getSessionDirectory()+"/"+
+								this.__getSeedFileName(sliceView, sliceId, seedsType)});
 						list.remove(selectedChild);
 						this.__reloadSeedImage( sliceView );
-						this.__saveSeedsXML();
 					}
 				}
 			}
 
-			seedsList.addListener("keypress", keyPressHandler, this);
-			correctionsList.addListener("keypress", keyPressHandler, this);
+			lists.forEach(function (list) {
+				list.set({scrollbarY : "off", visibility : "excluded",
+					width : null, opacity : 0.5});
+				sliceView.add(list, {top : 40, left : 0});
+				list.addListener("mousedown", stopPropagation);
+				list.addListener("mousewheel", stopPropagation);
+				list.addListener("keypress", keyPressHandler, this);
+				list.addListener("changeSelection", function () {
+					var slice = list.getSelection() && list.getSelection()[0];
+					if (slice) {
+						sliceView.setSlice(slice.getUserData("slice"));
+					}
+				});
+				this.addListener("close", function (e) {
+					sliceView.remove(list);
+				});
+			}, this);
 
-			this.addListener("close", function (e) {
-				sliceView.remove(seedsList);
-				sliceView.remove(correctionsList);
-			});
 		},
 
 		__clearSeeds : function ( ) {
-			var self = this;
-			this.__master.applyToViewers (function (viewer) {
+			this.__master.getViewers().forEach (function (viewer) {
 				viewer.setUserData("previousSlice", viewer.getSlice());
-				var seedsLists = viewer.getUserData(desk.SegTools.seedsListsString);
-				for (var i = 0; i < 2; i++) {
-					var numberOfSlices = viewer.getFirstSlice().getNumberOfSlices();
-					var seedsArray = [];
-					for (var j = 0;j != numberOfSlices; j++) {
-						seedsArray[j] = 0;
-					}
-					seedsLists[i].removeAll();
-					seedsLists[i].setUserData(desk.SegTools.seedsArrayString, seedsArray);
-				}
-				self.__reloadSeedImage(viewer);
-			});
+				viewer.getUserData("seeds").
+					forEach(function (list) {list.removeAll();});
+				this.__reloadSeedImage(viewer);
+			}, this);
 		},
 
 		__addNewSeedItemToList : function ( sliceView, sliceId, seedsType ) {
-			var seedsList = sliceView.getUserData(desk.SegTools.seedsListsString)[seedsType];
-			var seeds = seedsList.getChildren();
-			var tempPos = 0;
+			var seedsList = sliceView.getUserData("seeds")[seedsType];
+			var position = 0;
 
-			for(var i=0; i<seeds.length; i++)
-			{
-				var currentId = seeds[i].getUserData("slice");
-				if(currentId > sliceId) {
-					tempPos++;
-				}
+			if (!_.find(seedsList.getChildren(), function(seed){
+					var id = seed.getUserData("slice");
+					if (id > sliceId) position++;
+					return id == sliceId;
+				})) {
+
+				var sliceItem = new qx.ui.form.ListItem("" + sliceId);
+				sliceItem.setUserData("slice", sliceId);
+				sliceItem.addListener("mousedown", function(event) {
+					sliceView.setSlice(event.getTarget().getUserData("slice"));
+				});
+				seedsList.addAt(sliceItem, position);
 			}
-
-			var sliceItem = new qx.ui.form.ListItem(""+ sliceId);
-			sliceItem.setUserData("slice",sliceId);
-			sliceItem.addListener("click", function(event) {
-				sliceView.setSlice(event.getTarget().getUserData("slice"));
-			});
-
-			seedsList.addAt(sliceItem, tempPos);
-			seedsList.getUserData(desk.SegTools.seedsArrayString)[sliceId] = sliceItem;
 		},
 
 		__getSeedFileName : function(sliceView, sliceId, seedType) {			
