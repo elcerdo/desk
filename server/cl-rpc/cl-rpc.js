@@ -499,10 +499,10 @@ exports.performAction = function (POST, callback) {
 			fs.readFile(counterFile, function (err, data) {
 				var index = 1;
 				if (!err) {
-					index=JSON.parse(data).value + 1;
-				}
-				outputDirectory = libpath.join("actions", index);
-				fs.mkdir(libpath.join(filesRoot, "actions", index), function (err) {
+					index = JSON.parse(data).value + 1;
+				} 
+				outputDirectory = libpath.join("actions", index + "");
+				fs.mkdir(libpath.join(filesRoot, "actions", index + ""), function (err) {
 					if ( err ) {
 						callback( err.message );
 					} else {
@@ -675,6 +675,7 @@ exports.performAction = function (POST, callback) {
 		}
 	}],
 	function (err) {
+		console.log(header + "done");
 		if (err) {
 			response.status = "ERROR";
 			response.error = err;
