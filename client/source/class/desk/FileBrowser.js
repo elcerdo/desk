@@ -332,6 +332,7 @@ qx.Class.define("desk.FileBrowser",
 				}
 				break;
 			case 'log':
+			case 'dot': new desk.TextEditor(file); break;
 			case 'txt':
 				new desk.TextEditor (file);
 				break;
